@@ -38,7 +38,7 @@ class PreprocessingRequest:
     
     # SliceInputType.VTK_GRIDS
     vtk_grid_paths: Optional[List[Path]] = None
-    vtk_scalar_field: str = "scalars" 
+    vtk_scalar_field: str = "ScalarValue" 
 
     # SliceInputType.IMAGE 
     image_path: Optional[Path] = None

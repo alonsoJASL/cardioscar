@@ -92,6 +92,24 @@ def prepare_training_data(
     elif request.image_path is not None:
         # Image workflow (NEW - now implemented!)
         from cardioscar.utilities.io import extract_image_slice_data
+
+        print("\nDEBUG: Extracting image slice data...")
+        slice_data = extract_image_slice_data(
+            image_path=request.image_path,
+            slice_axis='z',
+            slice_indices=[0]
+        )
+
+        print(f"Number of slices extracted: {len(slice_data)}")
+        if len(slice_data) > 0:
+            bounds, values = slice_data[0]
+            print(f"Voxel bounds shape: {bounds.shape}")
+            print(f"Voxel values shape: {values.shape}")
+            print(f"First 3 bounds:\n{bounds[:3]}")
+            print(f"First 3 values: {values[:3]}")
+        else:
+            print("ERROR: No slices extracted!")
+
         
         logger.info(f"Loading image: {request.image_path}")
         slice_layers_data = extract_image_slice_data(

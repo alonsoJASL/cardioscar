@@ -18,6 +18,10 @@ from pathlib import Path
 from typing import Tuple, Dict, List, Optional
 
 from pycemrg_image_analysis.utilities.io import load_image
+from pycemrg_image_analysis.utilities.spatial import (
+    extract_slice_voxels,
+    get_voxel_physical_bounds
+)
 
 # =============================================================================
 # VTK MESH I/O
@@ -165,18 +169,12 @@ def extract_image_slice_data(
         >>> slice_data[0][0].shape  # First slice, bounds
         (1523, 6)
     """
-    from pycemrg_image_analysis.utilities.io import load_image
-    from pycemrg_image_analysis.utilities.spatial import (
-        extract_slice_voxels,
-        get_voxel_physical_bounds
-    )
     
     # Load image
     img = load_image(image_path)
     
     # Determine slice indices
     if slice_indices is None:
-        # Use ALL slices
         axis_map = {'x': 0, 'y': 1, 'z': 2}
         axis_idx = axis_map[slice_axis]
         n_slices = img.GetSize()[axis_idx]
@@ -185,21 +183,29 @@ def extract_image_slice_data(
     # Extract data from each slice
     slice_data = []
     for slice_idx in slice_indices:
-        # Get voxel indices and values for this slice
         voxel_indices, voxel_values = extract_slice_voxels(
             image=img,
             slice_index=slice_idx,
             slice_axis=slice_axis,
-            label=None  # Get all voxels (not just a specific label)
+            label=None
         )
         
         if len(voxel_indices) == 0:
-            # Empty slice - skip
             continue
         
-        # Get physical bounds for each voxel
+        # Get physical bounds - returns [xmin, ymin, zmin, xmax, ymax, zmax]
         voxel_bounds, _ = get_voxel_physical_bounds(img, voxel_indices)
         
-        slice_data.append((voxel_bounds, voxel_values))
+        # ✅ Convert to VTK format: [xmin, xmax, ymin, ymax, zmin, zmax]
+        voxel_bounds_vtk = np.column_stack([
+            voxel_bounds[:, 0],  # xmin
+            voxel_bounds[:, 3],  # xmax
+            voxel_bounds[:, 1],  # ymin
+            voxel_bounds[:, 4],  # ymax
+            voxel_bounds[:, 2],  # zmin
+            voxel_bounds[:, 5],  # zmax
+        ])
+        
+        slice_data.append((voxel_bounds_vtk, voxel_values))
     
     return slice_data
