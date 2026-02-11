@@ -27,6 +27,7 @@ dependencies = [
     "pyvista>=0.38",
     "torch>=2.0",
     "scikit-learn>=1.0",
+    "click>=8.0",
 ]
 
 [project.optional-dependencies]
@@ -43,6 +44,9 @@ Homepage = "https://github.com/OpenHeartDevelopers/cardioscar"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[project.scripts]
+cardioscar = "cardioscar.cli:cli"
 
 [tool.black]
 line-length = 88
