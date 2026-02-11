@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cardioscar"
+version = "0.1.0"
+authors = [
+  { name="Jose Alonso Solis-Lemus", email="j.solis-lemus@imperial.ac.uk" },
+  { name="Martin J. Bishop", email="martin.bishop@kcl.ac.uk" },
+]
+description = "Deep learning-based 3D myocardial scar reconstruction from sparse 2D LGE-CMR, standalone tool using pycemrg utilities."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+]
+
+dependencies = [
+    "pycemrg",
+    "pycemrg-model-creation",
+    "numpy>=1.21",
+    "pyvista>=0.38",
+    "torch>=2.0",
+    "scikit-learn>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "black>=22.0",
+    "mypy>=0.991",
+]
+
+[project.urls]
+Homepage = "https://github.com/OpenHeartDevelopers/cardioscar"
+"Bug Tracker" = "https://github.com/OpenHeartDevelopers/cardioscar/issues"
+"Related Paper" = "https://doi.org/10.1016/j.compbiomed.2025.111219"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.black]
+line-length = 88
+target-version = ['py38', 'py39', 'py310']
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
