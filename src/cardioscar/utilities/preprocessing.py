@@ -9,11 +9,14 @@ Handles spatial intersection tests and coordinate normalization.
 These are stateless utilities that operate on numpy arrays.
 File I/O is handled by orchestrators.
 """
-
+import logging
 import numpy as np
-from typing import Tuple
+
+from pathlib import Path
+from typing import Tuple, Optional, List
 from sklearn.preprocessing import MinMaxScaler
 
+logger = logging.getLogger(__name__)
 
 def find_nodes_in_cell_bounds(
     mesh_coords: np.ndarray,
@@ -215,3 +218,135 @@ def denormalize_coordinates(
     scaler.n_features_in_ = 3
     
     return scaler.inverse_transform(normalized_coords)
+
+def process_vtk_grid_data(
+    mesh_coords: np.ndarray,
+    grid_layers_data: List[Tuple[np.ndarray, np.ndarray]],  # ✅ Data, not Paths
+    z_padding: float = 5.0
+) -> np.ndarray:
+    """
+    Process VTK grid layer data and map to mesh nodes.
+    
+    Args:
+        mesh_coords: (N, 3) mesh node coordinates
+        grid_layers_data: List of (cell_bounds, scalar_values) tuples
+            - cell_bounds: (M, 6) bounding boxes per layer
+            - scalar_values: (M,) scalar values per layer
+        z_padding: Z-direction padding for slice thickness
+    
+    Returns:
+        (K, 5) array [X, Y, Z, scalar_value, group_id] with unique nodes
+    
+    Example:
+        >>> # Orchestrator loads the data first
+        >>> layer_data = []
+        >>> for path in grid_paths:
+        ...     bounds, values = load_grid_layer_data(path)
+        ...     layer_data.append((bounds, values))
+        >>> 
+        >>> # Then utility processes pure data
+        >>> from cardioscar.utilities import process_vtk_grid_data
+        >>> result = process_vtk_grid_data(mesh_coords, layer_data)
+    """
+    logger.info(f"Processing {len(grid_layers_data)} VTK grid layers")
+    
+    all_mappings = []
+    group_counter = 0
+    
+    for layer_idx, (cell_bounds, scalar_values) in enumerate(grid_layers_data):
+        logger.info(f"  Layer {layer_idx + 1}/{len(grid_layers_data)}")
+        
+        mapping = create_group_mapping(
+            mesh_coords=mesh_coords,
+            grid_cells_bounds=cell_bounds,
+            grid_cells_scalars=scalar_values,
+            z_padding=z_padding,
+            layer_id=layer_idx
+        )
+        
+        if len(mapping) > 0:
+            # Offset group IDs to make them globally unique
+            mapping[:, 4] += group_counter
+            group_counter = int(mapping[:, 4].max()) + 1
+            all_mappings.append(mapping)
+        else:
+            logger.warning(f"  No mesh nodes found in layer {layer_idx + 1}")
+    
+    if not all_mappings:
+        raise ValueError(
+            "No valid mappings found. "
+            "Check that grid layers overlap with mesh coordinates."
+        )
+    
+    combined_data = np.vstack(all_mappings)
+    unique_data = remove_duplicate_nodes(combined_data)
+    
+    logger.info(f"Combined {len(all_mappings)} layers → {len(unique_data)} unique nodes")
+    
+    return unique_data
+
+
+def process_image_slice_data(
+    mesh_coords: np.ndarray,
+    slice_layers_data: List[Tuple[np.ndarray, np.ndarray]],
+    z_padding: float = 5.0
+) -> np.ndarray:
+    """
+    Process image slice data and map to mesh nodes.
+    
+    Args:
+        mesh_coords: (N, 3) mesh node coordinates
+        slice_layers_data: List of (voxel_bounds, intensity_values) tuples
+            - voxel_bounds: (M, 6) physical bounds [xmin, ymin, zmin, xmax, ymax, zmax]
+            - intensity_values: (M,) intensity values per voxel
+        z_padding: Padding in slice direction (mm)
+    
+    Returns:
+        (K, 5) array [X, Y, Z, intensity, group_id] with unique nodes
+    
+    Example:
+        >>> # Orchestrator extracts slice data from image
+        >>> slice_data = extract_image_slice_data(image_path, slice_axis='z')
+        >>> 
+        >>> # Utility processes pure data
+        >>> result = process_image_slice_data(mesh_coords, slice_data, z_padding=5.0)
+    """
+    logger.info(f"Processing {len(slice_layers_data)} image slices")
+    
+    all_mappings = []
+    group_counter = 0
+    
+    for layer_idx, (voxel_bounds, voxel_values) in enumerate(slice_layers_data):
+        logger.info(f"  Slice {layer_idx + 1}/{len(slice_layers_data)}")
+        
+        # voxel_bounds is already in the format we need for create_group_mapping
+        # Shape: (M, 6) where each row is [xmin, ymin, zmin, xmax, ymax, zmax]
+        
+        mapping = create_group_mapping(
+            mesh_coords=mesh_coords,
+            grid_cells_bounds=voxel_bounds,  # Voxel bounds work same as VTK cell bounds
+            grid_cells_scalars=voxel_values,
+            z_padding=z_padding,
+            layer_id=layer_idx
+        )
+        
+        if len(mapping) > 0:
+            # Offset group IDs to make them globally unique
+            mapping[:, 4] += group_counter
+            group_counter = int(mapping[:, 4].max()) + 1
+            all_mappings.append(mapping)
+        else:
+            logger.warning(f"  No mesh nodes found in slice {layer_idx + 1}")
+    
+    if not all_mappings:
+        raise ValueError(
+            "No valid mappings found. "
+            "Check that image slices overlap with mesh coordinates."
+        )
+    
+    combined_data = np.vstack(all_mappings)
+    unique_data = remove_duplicate_nodes(combined_data)
+    
+    logger.info(f"Combined {len(all_mappings)} slices → {len(unique_data)} unique nodes")
+    
+    return unique_data

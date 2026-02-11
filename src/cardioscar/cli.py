@@ -54,23 +54,49 @@ def cli():
 @cli.command()
 @click.option('--mesh-vtk', type=click.Path(exists=True, path_type=Path), required=True,
               help='Path to 3D target mesh (VTK)')
-@click.option('--grid-layers', type=click.Path(exists=True, path_type=Path), multiple=True, required=True,
+# VTK grid input
+@click.option('--grid-layers', type=click.Path(exists=True, path_type=Path), multiple=True,
               help='Paths to 2D grid layers (VTK). Can specify multiple times.')
+@click.option('--vtk-scalar-field', type=str, default='ScalarValue',
+              help='Scalar field name in VTK grids')
+# Image input (NEW)
+@click.option('--image', type=click.Path(exists=True, path_type=Path),
+              help='Path to medical image (NIfTI, NRRD)')
+@click.option('--slice-axis', type=click.Choice(['x', 'y', 'z']), default='z',
+              help='Axis to slice along (default: z)')
+@click.option('--slice-indices', type=str,
+              help='Comma-separated slice indices (e.g., "2,5,8,11"). If not provided, uses ALL slices.')
+# Common options
 @click.option('--output', type=click.Path(path_type=Path), required=True,
               help='Output path for training data (.npz)')
 @click.option('--slice-thickness-padding', type=float, default=5.0,
               help='Z-direction padding (mm) for slice thickness')
-def prepare(mesh_vtk, grid_layers, output, slice_thickness_padding):
-    """Prepare training data from mesh and slice layers."""
+def prepare(mesh_vtk, grid_layers, vtk_scalar_field, image, slice_axis, slice_indices, output, slice_thickness_padding):
+    """Prepare training data from mesh and slices."""
     from cardioscar.logic.orchestrators import prepare_training_data, save_preprocessing_result
-
-    result = prepare_training_data(
-        mesh_path=mesh_vtk, 
-        grid_layer_paths=list(grid_layers),  # Convert tuple to list
+    from cardioscar.logic.contracts import PreprocessingRequest
+    
+    # Parse slice indices if provided
+    parsed_indices = None
+    if slice_indices:
+        parsed_indices = [int(i.strip()) for i in slice_indices.split(',')]
+    
+    # Build request
+    request = PreprocessingRequest(
+        mesh_path=mesh_vtk,
+        # VTK input
+        vtk_grid_paths=list(grid_layers) if grid_layers else None,
+        vtk_scalar_field=vtk_scalar_field,
+        # Image input
+        image_path=image,
+        slice_axis=slice_axis,
+        slice_indices=parsed_indices,
+        # Common
         slice_thickness_padding=slice_thickness_padding
     )
     
-    save_preprocessing_result(result=result, output_path=output)
+    result = prepare_training_data(request)
+    save_preprocessing_result(result, output)
 
 
 @cli.command()

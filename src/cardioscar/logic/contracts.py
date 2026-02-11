@@ -13,32 +13,50 @@ Following pycemrg principles:
 - Stateless - just data containers
 """
 
+from enum import Enum
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Union 
 
 import numpy as np
-import torch
-
 
 # =============================================================================
 # PREPROCESSING CONTRACTS
 # =============================================================================
 
+class SliceInputType(Enum): 
+    """Type of Slice Input"""
+    VTK_GRIDS = "vtk_grids"
+    IMAGE = "image" # nifti or nrrd 
+    DICOM_SERIES = "dicom_series" # TODO: implement DICOM stack
+
 @dataclass
 class PreprocessingRequest:
-    """
-    Request to create training data from mesh and slices.
-    
-    Attributes:
-        mesh_path: Path to 3D target mesh (VTK)
-        grid_layer_paths: List of paths to 2D grid layers (VTK)
-        slice_thickness_padding: Z-direction padding (mm) for slice thickness
-    """
+    """Request to create training data from mesh and slices."""
     mesh_path: Path
-    grid_layer_paths: List[Path]
     slice_thickness_padding: float = 5.0
+    
+    # SliceInputType.VTK_GRIDS
+    vtk_grid_paths: Optional[List[Path]] = None
+    vtk_scalar_field: str = "scalars" 
 
+    # SliceInputType.IMAGE 
+    image_path: Optional[Path] = None
+    slice_axis: Optional[str] = 'z' 
+    slice_indices: Optional[List[int]] = None
+
+    def __post_init__(self):
+        """Validate that exactly one input method is provided."""
+        vtk_provided = self.vtk_grid_paths is not None
+        image_provided = self.image_path is not None
+        
+        if not (vtk_provided ^ image_provided):
+            raise ValueError(
+                "Must provide exactly one of: vtk_grid_paths OR image_path"
+            )
+        
+        if image_provided and self.slice_axis is None:
+            raise ValueError("slice_axis required when using image_path")
 
 @dataclass
 class PreprocessingResult:

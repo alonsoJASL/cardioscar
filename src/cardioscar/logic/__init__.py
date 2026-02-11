@@ -8,6 +8,7 @@ Exposes reconstruction logic and contracts.
 from cardioscar.logic.contracts import (
     PreprocessingRequest,
     PreprocessingResult,
+    SliceInputType,
     InferenceRequest,
     InferenceResult
 )
@@ -27,6 +28,7 @@ __all__ = [
     # Contracts
     "PreprocessingRequest",
     "PreprocessingResult",
+    "SliceInputType",
     "InferenceRequest",
     "InferenceResult",
     # Logic

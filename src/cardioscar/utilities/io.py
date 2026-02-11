@@ -15,7 +15,7 @@ Following pycemrg principles:
 import numpy as np
 import pyvista as pv
 from pathlib import Path
-from typing import Tuple, Dict
+from typing import Tuple, Dict, List, Optional
 
 from pycemrg_image_analysis.utilities.io import load_image
 
@@ -136,24 +136,70 @@ def save_mesh_with_scalars(
 # FUTURE: MEDICAL IMAGE I/O (SimpleITK)
 # =============================================================================
 
-def load_image_slice(image_path: Path, slice_index: int, axis: str = 'z') -> np.ndarray:
+def extract_image_slice_data(
+    image_path: Path,
+    slice_axis: str = 'z',
+    slice_indices: Optional[List[int]] = None
+) -> List[Tuple[np.ndarray, np.ndarray]]:
     """
-    Load a single slice from a 3D medical image.
+    Extract voxel bounds and intensities from image slices.
     
     Args:
-        image_path: Path to NIfTI or other medical image
-        slice_index: Index of slice to extract
-        axis: Axis to slice along ('x', 'y', or 'z')
+        image_path: Path to medical image (NIfTI, NRRD)
+        slice_axis: Axis to slice along ('x', 'y', 'z')
+        slice_indices: List of slice indices. If None, extracts ALL slices.
     
     Returns:
-        (H, W) 2D array of image intensities
+        List of (voxel_bounds, voxel_intensities) tuples, one per slice:
+        - voxel_bounds: (N, 6) array [xmin, ymin, zmin, xmax, ymax, zmax]
+        - voxel_intensities: (N,) array of intensity values
     
-    Note:
-        Currently not implemented. Add when migrating from VTK grid layers
-        to direct NIfTI reading. Will use SimpleITK or pycemrg-image-analysis.
+    Example:
+        >>> slice_data = extract_image_slice_data(
+        ...     Path("lge.nii.gz"),
+        ...     slice_axis='z',
+        ...     slice_indices=[2, 5, 8, 11]
+        ... )
+        >>> len(slice_data)
+        4
+        >>> slice_data[0][0].shape  # First slice, bounds
+        (1523, 6)
     """
-    raise NotImplementedError(
-        "Direct image slice loading not yet implemented. "
-        "Currently using VTK grid layers as input. "
-        "To add: use pycemrg_image_analysis.utilities.io.load_image()"
+    from pycemrg_image_analysis.utilities.io import load_image
+    from pycemrg_image_analysis.utilities.spatial import (
+        extract_slice_voxels,
+        get_voxel_physical_bounds
     )
+    
+    # Load image
+    img = load_image(image_path)
+    
+    # Determine slice indices
+    if slice_indices is None:
+        # Use ALL slices
+        axis_map = {'x': 0, 'y': 1, 'z': 2}
+        axis_idx = axis_map[slice_axis]
+        n_slices = img.GetSize()[axis_idx]
+        slice_indices = list(range(n_slices))
+    
+    # Extract data from each slice
+    slice_data = []
+    for slice_idx in slice_indices:
+        # Get voxel indices and values for this slice
+        voxel_indices, voxel_values = extract_slice_voxels(
+            image=img,
+            slice_index=slice_idx,
+            slice_axis=slice_axis,
+            label=None  # Get all voxels (not just a specific label)
+        )
+        
+        if len(voxel_indices) == 0:
+            # Empty slice - skip
+            continue
+        
+        # Get physical bounds for each voxel
+        voxel_bounds, _ = get_voxel_physical_bounds(img, voxel_indices)
+        
+        slice_data.append((voxel_bounds, voxel_values))
+    
+    return slice_data

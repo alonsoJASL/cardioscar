@@ -18,7 +18,9 @@ from cardioscar.utilities.preprocessing import (
     remove_duplicate_nodes,
     compute_group_sizes,
     normalize_coordinates,
-    denormalize_coordinates
+    denormalize_coordinates,
+    process_image_slice_data, 
+    process_vtk_grid_data,
 )
 
 from cardioscar.utilities.batching import (
@@ -39,6 +41,8 @@ __all__ = [
     "compute_group_sizes",
     "normalize_coordinates",
     "denormalize_coordinates",
+    "process_image_slice_data", 
+    "process_vtk_grid_data",
     # Batching
     "ScarReconstructionDataset",
     "create_complete_group_batches",

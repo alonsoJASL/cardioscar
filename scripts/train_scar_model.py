@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# TODO: Refactor to use functions in logic/orchestrators
 """
 Train Patient-Specific Scar Reconstruction Model
 

@@ -28,6 +28,7 @@ import torch
 from cardioscar.logic.contracts import (
     PreprocessingRequest,
     PreprocessingResult,
+    SliceInputType,
     InferenceRequest,
     InferenceResult
 )
@@ -37,10 +38,10 @@ from cardioscar.utilities.io import (
     save_mesh_with_scalars
 )
 from cardioscar.utilities.preprocessing import (
-    create_group_mapping,
-    remove_duplicate_nodes,
     compute_group_sizes,
-    normalize_coordinates
+    normalize_coordinates,
+    process_vtk_grid_data,
+    process_image_slice_data,
 )
 from cardioscar.utilities.batching import (
     ScarReconstructionDataset,
@@ -51,97 +52,70 @@ from cardioscar.training.trainer import train_model
 from cardioscar.engines import BayesianNN
 from cardioscar.logic.reconstruction import ReconstructionLogic
 
-logger = logging.getLogger(__name__)
+from pycemrg_image_analysis.utilities.geometry import *
 
+logger = logging.getLogger(__name__)
 
 # =============================================================================
 # PREPROCESSING ORCHESTRATOR
 # =============================================================================
 
 def prepare_training_data(
-    mesh_path: Path,
-    grid_layer_paths: List[Path],
-    slice_thickness_padding: float = 5.0
+    request: PreprocessingRequest
 ) -> PreprocessingResult:
-    """
-    Orchestrate training data preparation from mesh and grid layers.
+    """Orchestrate training data preparation."""
     
-    Workflow:
-    1. Load mesh coordinates
-    2. Process each grid layer (spatial mapping)
-    3. Combine and deduplicate
-    4. Normalize coordinates
-    5. Compute group statistics
-    
-    Args:
-        mesh_path: Path to 3D target mesh (VTK)
-        grid_layer_paths: List of paths to 2D grid layers (VTK)
-        slice_thickness_padding: Z-direction padding (mm) for slice thickness
-    
-    Returns:
-        PreprocessingResult with training data arrays and metadata
-    
-    Example:
-        >>> result = prepare_training_data(
-        ...     mesh_path=Path("mesh.vtk"),
-        ...     grid_layer_paths=[Path("slice1.vtk"), Path("slice2.vtk")],
-        ...     slice_thickness_padding=5.0
-        ... )
-        >>> result.n_nodes
-        25739
-        >>> result.n_groups
-        751
-    """
-    logger.info(f"Loading target mesh: {mesh_path}")
-    mesh_coords = load_mesh_points(mesh_path)
+    # 1. Load mesh (I/O)
+    logger.info(f"Loading target mesh: {request.mesh_path}")
+    mesh_coords = load_mesh_points(request.mesh_path)
     logger.info(f"  Loaded {len(mesh_coords)} mesh nodes")
     
-    logger.info(f"Found {len(grid_layer_paths)} grid layers")
-    
-    # Process each grid layer
-    all_mappings = []
-    group_counter = 0
-    
-    for layer_idx, grid_path in enumerate(sorted(grid_layer_paths)):
-        logger.info(f"Processing layer {layer_idx + 1}/{len(grid_layer_paths)}: {grid_path.name}")
+    # 2. Load slice data based on input type (I/O)
+    if request.vtk_grid_paths is not None:
+        # VTK workflow (existing)
+        logger.info(f"Loading {len(request.vtk_grid_paths)} VTK grid layers")
+        grid_layers_data = []
         
-        cell_bounds, scalar_values = load_grid_layer_data(grid_path)
+        for grid_path in sorted(request.vtk_grid_paths):
+            cell_bounds, scalar_values = load_grid_layer_data(
+                grid_path,
+                scalar_field_name=request.vtk_scalar_field
+            )
+            grid_layers_data.append((cell_bounds, scalar_values))
         
-        mapping = create_group_mapping(
+        cell_data = process_vtk_grid_data(
             mesh_coords=mesh_coords,
-            grid_cells_bounds=cell_bounds,
-            grid_cells_scalars=scalar_values,
-            z_padding=slice_thickness_padding,
-            layer_id=layer_idx
+            grid_layers_data=grid_layers_data,
+            z_padding=request.slice_thickness_padding
+        )
+    
+    elif request.image_path is not None:
+        # Image workflow (NEW - now implemented!)
+        from cardioscar.utilities.io import extract_image_slice_data
+        
+        logger.info(f"Loading image: {request.image_path}")
+        slice_layers_data = extract_image_slice_data(
+            image_path=request.image_path,
+            slice_axis=request.slice_axis,
+            slice_indices=request.slice_indices
         )
         
-        if len(mapping) > 0:
-            # Offset group IDs to make them globally unique
-            mapping[:, 4] += group_counter
-            group_counter = int(mapping[:, 4].max()) + 1
-            all_mappings.append(mapping)
+        logger.info(f"  Extracted {len(slice_layers_data)} slices")
+        
+        cell_data = process_image_slice_data(
+            mesh_coords=mesh_coords,
+            slice_layers_data=slice_layers_data,
+            z_padding=request.slice_thickness_padding
+        )
     
-    # Combine all layers
-    if not all_mappings:
-        raise ValueError("No valid mappings found. Check grid layers and mesh overlap.")
+    # 3. Post-process (same for both workflows)
+    coordinates = cell_data[:, 0:3]
+    intensities = cell_data[:, 3:4]
+    group_ids = cell_data[:, 4].astype(np.int32)
     
-    combined_data = np.vstack(all_mappings)
-    
-    # Remove duplicates (nodes appearing in multiple cells)
-    unique_data = remove_duplicate_nodes(combined_data)
-    
-    # Extract components
-    coordinates = unique_data[:, 0:3]
-    intensities = unique_data[:, 3:4]
-    group_ids = unique_data[:, 4].astype(np.int32)
-    
-    # Normalize coordinates
     normalized_coords, scaler = normalize_coordinates(coordinates)
-    
-    # Compute group sizes
     group_sizes = compute_group_sizes(group_ids)
     
-    # Summary statistics
     n_nodes = len(coordinates)
     n_groups = len(group_sizes)
     
@@ -149,8 +123,6 @@ def prepare_training_data(
     logger.info(f"  Total nodes: {n_nodes}")
     logger.info(f"  Unique groups: {n_groups}")
     logger.info(f"  Avg nodes/group: {group_sizes.mean():.1f}")
-    logger.info(f"  Min nodes/group: {group_sizes.min()}")
-    logger.info(f"  Max nodes/group: {group_sizes.max()}")
     
     return PreprocessingResult(
         coordinates=normalized_coords.astype(np.float32),
