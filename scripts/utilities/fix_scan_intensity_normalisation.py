@@ -42,3 +42,6 @@ if __name__ == '__main__' :
     parser = argparse.ArgumentParser()
     parser.add_argument('--input', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=False)
+
+    args = parser.parse_args()
+    main(args)
