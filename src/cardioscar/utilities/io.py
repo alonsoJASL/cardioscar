@@ -12,8 +12,11 @@ Following pycemrg principles:
 - Minimal dependencies on external formats
 """
 
+import logging
 import numpy as np
 import pyvista as pv
+import SimpleITK as sitk
+
 from pathlib import Path
 from typing import Tuple, Dict, List, Optional
 
@@ -23,6 +26,7 @@ from pycemrg_image_analysis.utilities.spatial import (
     get_voxel_physical_bounds
 )
 
+logger = logging.getLogger(__name__)
 # =============================================================================
 # VTK MESH I/O
 # =============================================================================
@@ -168,8 +172,10 @@ def extract_image_slice_data(
         4
         >>> slice_data[0][0].shape  # First slice, bounds
         (1523, 6)
-    """
-    
+
+    Intensities are automatically normalized to [0, 1] range.
+    Voxel bounds are converted to VTK format.
+    """    
     # Load image
     img = load_image(image_path)
     
@@ -179,6 +185,18 @@ def extract_image_slice_data(
         axis_idx = axis_map[slice_axis]
         n_slices = img.GetSize()[axis_idx]
         slice_indices = list(range(n_slices))
+    
+    # Get global intensity range from entire image for normalization
+    img_array = sitk.GetArrayFromImage(img)
+    global_min = float(img_array.min())
+    global_max = float(img_array.max())
+    
+    if global_max > 1.0:
+        logger.info(f"Normalizing intensities: [{global_min:.1f}, {global_max:.1f}] → [0, 1]")
+        normalize = True
+    else:
+        logger.info(f"Intensities already normalized: [{global_min:.3f}, {global_max:.3f}]")
+        normalize = False
     
     # Extract data from each slice
     slice_data = []
@@ -206,6 +224,12 @@ def extract_image_slice_data(
             voxel_bounds[:, 5],  # zmax
         ])
         
-        slice_data.append((voxel_bounds_vtk, voxel_values))
+        # Normalize intensities if needed
+        if normalize:
+            voxel_values_norm = (voxel_values - global_min) / (global_max - global_min)
+        else:
+            voxel_values_norm = voxel_values
+        
+        slice_data.append((voxel_bounds_vtk, voxel_values_norm))
     
     return slice_data
