@@ -8,8 +8,8 @@ from pathlib import Path
 
 def main(args) : 
 
+    mesh = pv.read(args.mesh)
     lge = sitk.ReadImage(args.ref_scan)
-    mesh = pv.read(args.input_mesh)
     seg = sitk.ReadImage(args.ref_seegmentation)
 
     # Get physical position of a known scar voxel
