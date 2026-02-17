@@ -10,7 +10,7 @@ def main(args) :
 
     mesh = pv.read(args.mesh)
     lge = sitk.ReadImage(args.ref_scan)
-    seg = sitk.ReadImage(args.ref_seegmentation)
+    seg = sitk.ReadImage(args.ref_segmentation)
 
     # Get physical position of a known scar voxel
     # Label 3 = scar in segmentation
