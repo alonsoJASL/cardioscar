@@ -19,7 +19,6 @@ from cardioscar.utilities.preprocessing import (
     compute_group_sizes,
     normalize_coordinates,
     denormalize_coordinates,
-    process_image_slice_data, 
     process_vtk_grid_data,
 )
 
@@ -41,7 +40,6 @@ __all__ = [
     "compute_group_sizes",
     "normalize_coordinates",
     "denormalize_coordinates",
-    "process_image_slice_data", 
     "process_vtk_grid_data",
     # Batching
     "ScarReconstructionDataset",
