@@ -21,10 +21,7 @@ from pathlib import Path
 from typing import Tuple, Dict, List, Optional
 
 from pycemrg_image_analysis.utilities.io import load_image
-from pycemrg_image_analysis.utilities.spatial import (
-    extract_slice_voxels,
-    get_voxel_physical_bounds
-)
+from pycemrg_image_analysis.utilities.spatial import sample_image_at_points
 
 logger = logging.getLogger(__name__)
 # =============================================================================
@@ -146,90 +143,214 @@ def save_mesh_with_scalars(
 
 def extract_image_slice_data(
     image_path: Path,
-    slice_axis: str = 'z',
-    slice_indices: Optional[List[int]] = None
-) -> List[Tuple[np.ndarray, np.ndarray]]:
+    mesh_coords: np.ndarray,
+    precise: bool = True,
+    slice_thickness_padding: Optional[float] = None,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Extract voxel bounds and intensities from image slices.
-    
-    Args:
-        image_path: Path to medical image (NIfTI, NRRD)
-        slice_axis: Axis to slice along ('x', 'y', 'z')
-        slice_indices: List of slice indices. If None, extracts ALL slices.
-    
-    Returns:
-        List of (voxel_bounds, voxel_intensities) tuples, one per slice:
-        - voxel_bounds: (N, 6) array [xmin, ymin, zmin, xmax, ymax, zmax]
-        - voxel_intensities: (N,) array of intensity values
-    
-    Example:
-        >>> slice_data = extract_image_slice_data(
-        ...     Path("lge.nii.gz"),
-        ...     slice_axis='z',
-        ...     slice_indices=[2, 5, 8, 11]
-        ... )
-        >>> len(slice_data)
-        4
-        >>> slice_data[0][0].shape  # First slice, bounds
-        (1523, 6)
+    Sample image intensities at mesh node locations.
 
-    Intensities are automatically normalized to [0, 1] range.
-    Voxel bounds are converted to VTK format.
-    """    
-    # Load image
-    img = load_image(image_path)
-    
-    # Determine slice indices
-    if slice_indices is None:
-        axis_map = {'x': 0, 'y': 1, 'z': 2}
-        axis_idx = axis_map[slice_axis]
-        n_slices = img.GetSize()[axis_idx]
-        slice_indices = list(range(n_slices))
-    
-    # Get global intensity range from entire image for normalization
-    img_array = sitk.GetArrayFromImage(img)
-    global_min = float(img_array.min())
-    global_max = float(img_array.max())
-    
-    if global_max > 1.0:
-        logger.info(f"Normalizing intensities: [{global_min:.1f}, {global_max:.1f}] → [0, 1]")
-        normalize = True
-    else:
-        logger.info(f"Intensities already normalized: [{global_min:.3f}, {global_max:.3f}]")
-        normalize = False
-    
-    # Extract data from each slice
-    slice_data = []
-    for slice_idx in slice_indices:
-        voxel_indices, voxel_values = extract_slice_voxels(
-            image=img,
-            slice_index=slice_idx,
-            slice_axis=slice_axis,
-            label=None
+    Replaces the previous bounding-box-based approach, which produced
+    incorrect results for oblique images (bounding boxes spanning the
+    entire physical volume). Delegates all coordinate transforms to
+    SimpleITK via sample_image_at_points(), which handles arbitrary
+    image orientations correctly.
+
+    Nodes outside the image volume are silently excluded. Groups are
+    defined by shared voxel: all mesh nodes that fall inside the same
+    image voxel receive the same group ID. This preserves the
+    group-based loss structure used by the training pipeline.
+
+    Args:
+        image_path: Path to the NIfTI image (LGE scan or segmentation).
+        mesh_coords: (N, 3) array of mesh node physical coordinates in
+            (X, Y, Z) convention, as returned by pyvista mesh.points.
+        precise: If True (default), uses per-point
+            TransformPhysicalPointToContinuousIndex. Recommended for
+            oblique images where the vectorized affine inverse may
+            disagree at voxel boundaries. If False, uses vectorized
+            affine inverse (~1000x faster, suitable for axis-aligned
+            images).
+        slice_thickness_padding: Deprecated. Has no effect. Retained
+            for backwards compatibility with existing CLI calls. Will
+            be removed in a future release.
+
+    Returns:
+        Tuple of three aligned (M,) arrays:
+        - node_indices: (M,) integer indices into mesh_coords
+          identifying which input nodes were successfully sampled.
+        - group_ids: (M,) integer group ID per sampled node. Nodes
+          sharing the same voxel receive the same group ID.
+        - intensities: (M,) float32 intensity values normalised to
+          [0, 1] from the raw image range.
+
+    Raises:
+        FileNotFoundError: If image_path does not exist.
+        ValueError: If mesh_coords is not shape (N, 3).
+
+    Example:
+        >>> mesh = pv.read("mesh.vtk")
+        >>> mesh_coords = np.array(mesh.points)  # (N, 3) XYZ
+        >>> node_indices, group_ids, intensities = extract_image_slice_data(
+        ...     image_path=Path("lge_scan.nii.gz"),
+        ...     mesh_coords=mesh_coords,
+        ... )
+        >>> # Map back to full mesh for visualisation
+        >>> field = np.zeros(len(mesh_coords))
+        >>> field[node_indices] = intensities
+    """
+    if slice_thickness_padding is not None:
+        import warnings
+        warnings.warn(
+            "slice_thickness_padding is deprecated and has no effect. "
+            "Physical slice coverage is now handled implicitly by "
+            "sample_image_at_points(). Remove this argument.",
+            DeprecationWarning,
+            stacklevel=2,
         )
-        
-        if len(voxel_indices) == 0:
-            continue
-        
-        # Get physical bounds - returns [xmin, ymin, zmin, xmax, ymax, zmax]
-        voxel_bounds, _ = get_voxel_physical_bounds(img, voxel_indices)
-        
-        # ✅ Convert to VTK format: [xmin, xmax, ymin, ymax, zmin, zmax]
-        voxel_bounds_vtk = np.column_stack([
-            voxel_bounds[:, 0],  # xmin
-            voxel_bounds[:, 3],  # xmax
-            voxel_bounds[:, 1],  # ymin
-            voxel_bounds[:, 4],  # ymax
-            voxel_bounds[:, 2],  # zmin
-            voxel_bounds[:, 5],  # zmax
-        ])
-        
-        # Normalize intensities if needed
-        if normalize:
-            voxel_values_norm = (voxel_values - global_min) / (global_max - global_min)
-        else:
-            voxel_values_norm = voxel_values
-        
-        slice_data.append((voxel_bounds_vtk, voxel_values_norm))
+
+    if mesh_coords.ndim != 2 or mesh_coords.shape[1] != 3:
+        raise ValueError(
+            f"mesh_coords must have shape (N, 3), got {mesh_coords.shape}"
+        )
+
+    logger.info(f"Loading image: {image_path}")
+    image = load_image(image_path)
+    logger.info(
+        f"  Size: {image.GetSize()}, "
+        f"Spacing: {[f'{s:.2f}' for s in image.GetSpacing()]} mm"
+    )
+
+    # Delegate all oblique/coordinate math to pycemrg-image-analysis.
+    # precise=True is the safe default for LGE images, which are
+    # typically heavily oblique (~45 degrees).
+    sampled_indices, raw_values = sample_image_at_points(
+        image=image,
+        physical_points=mesh_coords,
+        precise=precise,
+    )
+
+    if len(sampled_indices) == 0:
+        logger.warning(
+            "No mesh nodes fall inside the image volume. "
+            "Verify the mesh is registered to the image space."
+        )
+        empty_int = np.empty(0, dtype=np.int64)
+        return empty_int, empty_int, np.empty(0, dtype=np.float32)
+
+    logger.info(
+        f"  Sampled {len(sampled_indices):,} / {len(mesh_coords):,} nodes"
+    )
+
+    # Normalize to [0, 1] using global range of sampled values.
+    global_min = float(raw_values.min())
+    global_max = float(raw_values.max())
+
+    if global_max > global_min:
+        intensities = (raw_values - global_min) / (global_max - global_min)
+        logger.info(
+            f"  Intensity range: [{global_min:.1f}, {global_max:.1f}] → [0, 1]"
+        )
+    else:
+        intensities = np.zeros_like(raw_values)
+        logger.warning("Flat image detected - all intensities set to 0.")
+
+    # Derive group IDs: nodes mapping to the same voxel share a group.
+    # Flat voxel index: z * (sY * sX) + y * sX + x
+    size_x, size_y, _ = image.GetSize()
+    voxel_indices = _physical_to_voxel_indices(
+        image=image,
+        physical_points=mesh_coords[sampled_indices],
+        precise=precise,
+    )
+    group_ids = (
+        voxel_indices[:, 2] * (size_y * size_x)
+        + voxel_indices[:, 1] * size_x
+        + voxel_indices[:, 0]
+    )
+
+    logger.info(f"  Unique groups (voxels): {len(np.unique(group_ids)):,}")
+
+    return (
+        sampled_indices.astype(np.int64),
+        group_ids.astype(np.int64),
+        intensities.astype(np.float32),
+    )
+
+def _physical_to_voxel_indices(
+    image: sitk.Image,
+    physical_points: np.ndarray,
+    precise: bool,
+) -> np.ndarray:
+    """
+    Convert physical coordinates to voxel indices.
+
+    All input points are assumed to be inside the image volume.
+    Matches the transform mode used by sample_image_at_points so
+    group boundaries are consistent with sampled values.
+
+    Args:
+        image: SimpleITK image.
+        physical_points: (M, 3) physical coordinates in (X, Y, Z).
+        precise: If True, uses per-point TransformPhysicalPointToIndex.
+                 If False, uses vectorized affine inverse.
+
+    Returns:
+        (M, 3) integer voxel indices in (X, Y, Z) order.
+    """
+    if precise:
+        return np.array([
+            image.TransformPhysicalPointToIndex(pt.tolist())
+            for pt in physical_points
+        ], dtype=np.int64)
+
+    # Vectorized affine inverse - matches _sample_fast in pycemrg
+    origin = np.array(image.GetOrigin())
+    spacing = np.array(image.GetSpacing())
+    direction = np.array(image.GetDirection()).reshape(3, 3)
+    direction_inv = np.linalg.inv(direction)
+    shifted = physical_points - origin
+    indices_float = (direction_inv @ shifted.T).T / spacing
     
-    return slice_data
+    return np.floor(indices_float).astype(np.int64)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

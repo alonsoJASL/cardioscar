@@ -35,13 +35,14 @@ from cardioscar.logic.contracts import (
 from cardioscar.utilities.io import (
     load_mesh_points,
     load_grid_layer_data,
-    save_mesh_with_scalars
+    save_mesh_with_scalars, 
+    extract_image_slice_data,
 )
 from cardioscar.utilities.preprocessing import (
     compute_group_sizes,
     normalize_coordinates,
     process_vtk_grid_data,
-    process_image_slice_data,
+    assemble_image_cell_data,
 )
 from cardioscar.utilities.batching import (
     ScarReconstructionDataset,
@@ -90,40 +91,19 @@ def prepare_training_data(
         )
     
     elif request.image_path is not None:
-        # Image workflow (NEW - now implemented!)
-        from cardioscar.utilities.io import extract_image_slice_data
-
-        print("\nDEBUG: Extracting image slice data...")
-        slice_data = extract_image_slice_data(
-            image_path=request.image_path,
-            slice_axis='z',
-            slice_indices=[0]
-        )
-
-        print(f"Number of slices extracted: {len(slice_data)}")
-        if len(slice_data) > 0:
-            bounds, values = slice_data[0]
-            print(f"Voxel bounds shape: {bounds.shape}")
-            print(f"Voxel values shape: {values.shape}")
-            print(f"First 3 bounds:\n{bounds[:3]}")
-            print(f"First 3 values: {values[:3]}")
-        else:
-            print("ERROR: No slices extracted!")
-
-        
         logger.info(f"Loading image: {request.image_path}")
-        slice_layers_data = extract_image_slice_data(
+
+        node_indices, group_ids, intensities = extract_image_slice_data(
             image_path=request.image_path,
-            slice_axis=request.slice_axis,
-            slice_indices=request.slice_indices
-        )
-        
-        logger.info(f"  Extracted {len(slice_layers_data)} slices")
-        
-        cell_data = process_image_slice_data(
             mesh_coords=mesh_coords,
-            slice_layers_data=slice_layers_data,
-            z_padding=request.slice_thickness_padding
+            precise=True,
+        )
+
+        cell_data = assemble_image_cell_data(
+            mesh_coords=mesh_coords,
+            node_indices=node_indices,
+            group_ids=group_ids,
+            intensities=intensities,
         )
     
     # 3. Post-process (same for both workflows)

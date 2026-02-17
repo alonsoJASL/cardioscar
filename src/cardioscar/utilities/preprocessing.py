@@ -286,67 +286,82 @@ def process_vtk_grid_data(
     return unique_data
 
 
-def process_image_slice_data(
+def assemble_image_cell_data(
     mesh_coords: np.ndarray,
-    slice_layers_data: List[Tuple[np.ndarray, np.ndarray]],
-    z_padding: float = 5.0
+    node_indices: np.ndarray,
+    group_ids: np.ndarray,
+    intensities: np.ndarray,
 ) -> np.ndarray:
     """
-    Process image slice data and map to mesh nodes.
-    
+    Assemble sampled image data into the canonical cell_data format.
+
+    Converts the output of extract_image_slice_data() into the same
+    (K, 5) array produced by process_vtk_grid_data(), so all downstream
+    code (coordinate normalization, group size computation, batching)
+    is unchanged.
+
+    Group IDs are re-indexed from 0 to preserve the invariant that
+    group_ids are contiguous integers starting at 0, matching what
+    process_vtk_grid_data() produces.
+
     Args:
-        mesh_coords: (N, 3) mesh node coordinates
-        slice_layers_data: List of (voxel_bounds, intensity_values) tuples
-            - voxel_bounds: (M, 6) physical bounds [xmin, ymin, zmin, xmax, ymax, zmax]
-            - intensity_values: (M,) intensity values per voxel
-        z_padding: Padding in slice direction (mm)
-    
+        mesh_coords: (N, 3) full mesh node coordinates in (X, Y, Z).
+        node_indices: (M,) indices into mesh_coords for sampled nodes.
+        group_ids: (M,) voxel-based group ID per sampled node.
+        intensities: (M,) normalised intensity values in [0, 1].
+
     Returns:
-        (K, 5) array [X, Y, Z, intensity, group_id] with unique nodes
-    
+        (M, 5) float32 array with columns:
+            [X, Y, Z, intensity, group_id]
+        Duplicate nodes (same XYZ) are removed, keeping first occurrence.
+
+    Raises:
+        ValueError: If no valid mappings are found (empty inputs).
+
     Example:
-        >>> # Orchestrator extracts slice data from image
-        >>> slice_data = extract_image_slice_data(image_path, slice_axis='z')
-        >>> 
-        >>> # Utility processes pure data
-        >>> result = process_image_slice_data(mesh_coords, slice_data, z_padding=5.0)
+        >>> node_indices, group_ids, intensities = extract_image_slice_data(
+        ...     image_path=Path("lge.nii.gz"),
+        ...     mesh_coords=mesh_coords,
+        ... )
+        >>> cell_data = assemble_image_cell_data(
+        ...     mesh_coords, node_indices, group_ids, intensities
+        ... )
+        >>> cell_data.shape  # (K, 5)
+        (7077487, 5)
     """
-    logger.info(f"Processing {len(slice_layers_data)} image slices")
-    
-    all_mappings = []
-    group_counter = 0
-    
-    for layer_idx, (voxel_bounds, voxel_values) in enumerate(slice_layers_data):
-        logger.info(f"  Slice {layer_idx + 1}/{len(slice_layers_data)}")
-        
-        # voxel_bounds is already in the format we need for create_group_mapping
-        # Shape: (M, 6) where each row is [xmin, ymin, zmin, xmax, ymax, zmax]
-        
-        mapping = create_group_mapping(
-            mesh_coords=mesh_coords,
-            grid_cells_bounds=voxel_bounds,  # Voxel bounds work same as VTK cell bounds
-            grid_cells_scalars=voxel_values,
-            z_padding=z_padding,
-            layer_id=layer_idx
-        )
-        
-        if len(mapping) > 0:
-            # Offset group IDs to make them globally unique
-            mapping[:, 4] += group_counter
-            group_counter = int(mapping[:, 4].max()) + 1
-            all_mappings.append(mapping)
-        else:
-            logger.warning(f"  No mesh nodes found in slice {layer_idx + 1}")
-    
-    if not all_mappings:
+    if len(node_indices) == 0:
         raise ValueError(
             "No valid mappings found. "
-            "Check that image slices overlap with mesh coordinates."
+            "Check that the image overlaps with mesh coordinates "
+            "and the mesh is registered to the image space."
         )
-    
-    combined_data = np.vstack(all_mappings)
-    unique_data = remove_duplicate_nodes(combined_data)
-    
-    logger.info(f"Combined {len(all_mappings)} slices → {len(unique_data)} unique nodes")
-    
+
+    # Gather XYZ for sampled nodes
+    sampled_coords = mesh_coords[node_indices]  # (M, 3)
+
+    # Re-index group IDs to contiguous 0-based integers.
+    # flat voxel indices are large sparse integers - re-index for
+    # downstream compatibility with compute_group_sizes().
+    _, reindexed_group_ids = np.unique(group_ids, return_inverse=True)
+
+    # Assemble (M, 5) array
+    cell_data = np.column_stack([
+        sampled_coords,              # X, Y, Z  cols 0-2
+        intensities,                 # intensity col 3
+        reindexed_group_ids,         # group_id  col 4
+    ]).astype(np.float32)
+
+    # Remove duplicates: a node can map to a voxel boundary and appear
+    # twice if two adjacent voxels claim it. Keep first occurrence.
+    unique_data = remove_duplicate_nodes(cell_data)
+
+    n_removed = len(cell_data) - len(unique_data)
+    if n_removed > 0:
+        logger.debug(f"Removed {n_removed} duplicate nodes at voxel boundaries.")
+
+    logger.info(
+        f"Assembled {len(unique_data):,} unique nodes, "
+        f"{len(np.unique(unique_data[:, 4])):,} groups"
+    )
+
     return unique_data
