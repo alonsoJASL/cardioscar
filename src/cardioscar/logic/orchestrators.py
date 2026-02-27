@@ -196,6 +196,10 @@ def train_scar_model(
     """
     if device is None:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    torch.manual_seed(config.seed)
+    if device.type == 'cuda':
+        torch.cuda.manual_seed_all(config.seed)
     
     logger.info(f"Using device: {device}")
     

@@ -206,12 +206,25 @@ def generate_seeds(
     type=float,
     help="Physical padding in mm added around the mesh bounding box on all sides.",
 )
+@click.option(
+    "--base-value",
+    default=0.1,
+    show_default=True,
+    type=click.FloatRange(min=0.0, max=1.0),
+    help=(
+        "Baseline intensity assigned to all voxels inside the mesh but carrying "
+        "no scar signal. Scar values are added on top, so the effective range "
+        "is [base-value, base-value + max_scar], clipped to [0, 1]. "
+        "Set to 0.0 to disable (background-only masking without a baseline)."
+    ),
+)
 def rasterize(
     mesh_vtk: Path,
     output_dir: Path,
     scalar_field: str,
     voxel_size: float,
     padding: float,
+    base_value: float,
 ) -> None:
     """
     Convert a VTK mesh with a point scalar to an axis-aligned NIfTI volume.
@@ -221,9 +234,11 @@ def rasterize(
     mesh and image share the same physical coordinate frame, making
     registration trivially exact for synthetic validation.
 
-    Points in the bounding-box grid that fall outside mesh cells receive
-    value 0.0 (background). No surface masking is applied.
+    Voxels inside the mesh but carrying no scar signal receive --base-value,
+    simulating the background myocardial signal in LGE-CMR. Scar signal is
+    added on top of this baseline. True background (outside the mesh) is 0.
     """
+    logger.info(f'Rasterising mesh [{mesh_vtk.name}]')
     mesh = pv.read(mesh_vtk)
 
     if scalar_field not in mesh.point_data.keys():
@@ -234,13 +249,14 @@ def rasterize(
 
     logger.info(f"Rasterizing: {mesh_vtk.name}")
     logger.info(f"  Mesh nodes: {mesh.n_points}, cells: {mesh.n_cells}")
-    logger.info(f"  Scalar field: '{scalar_field}'")
+    logger.info(f"  Scalar field: '{scalar_field}', base value: {base_value:.3f}")
 
     volume, origin, spacing = _probe_mesh_to_volume(
         mesh=mesh,
         scalar_field=scalar_field,
         voxel_size=voxel_size,
         padding=padding,
+        base_value=base_value,
     )
 
     logger.info(f"  Output grid shape (Z, Y, X): {volume.shape}")
@@ -394,19 +410,29 @@ def _probe_mesh_to_volume(
     scalar_field: str,
     voxel_size: float,
     padding: float,
+    base_value: float = 0.0,
 ) -> Tuple[np.ndarray, Tuple[float, float, float], Tuple[float, float, float]]:
     """
     Sample a mesh point scalar onto a regular bounding-box grid.
 
     Constructs a uniform ImageData grid over the padded mesh bounding box,
-    then uses PyVista's probe() to interpolate the scalar field from mesh
-    cells onto grid points. Points outside mesh cells receive value 0.0.
+    then uses PyVista's probe() to interpolate scalar values from mesh cells
+    onto grid points.
+
+    A temporary all-ones scalar ('_probe_mask') is added to a copy of the
+    mesh to distinguish interior voxels (inside mesh cells) from true
+    background (outside all cells). Interior voxels with no scar signal
+    receive base_value; interior voxels with scar signal receive
+    base_value + scar_value, clipped to [0, 1]. The original mesh is
+    never mutated.
 
     Args:
         mesh: PyVista mesh with the target scalar in point_data.
         scalar_field: Name of the point scalar array to rasterize.
         voxel_size: Isotropic grid spacing in mm.
         padding: Physical margin added around the bounding box on all sides.
+        base_value: Baseline intensity for all voxels inside the mesh.
+            0.0 disables the baseline (scar-only rasterization).
 
     Returns:
         Tuple of:
@@ -421,6 +447,8 @@ def _probe_mesh_to_volume(
         C-order (numpy default), matching the (Z, Y, X) convention used
         throughout pycemrg-image-analysis.
     """
+    _MASK_FIELD = "_probe_mask"
+
     bounds = mesh.bounds  # (xmin, xmax, ymin, ymax, zmin, zmax)
     xmin, xmax, ymin, ymax, zmin, zmax = bounds
 
@@ -439,18 +467,35 @@ def _probe_mesh_to_volume(
         origin=(ox, oy, oz),
     )
 
-    # Probe: sample mesh scalar values at grid point locations.
-    # Points outside mesh cells → NaN_value (fill with 0 afterwards).
-    result = grid.probe(mesh)
+    # Work on a shallow copy so the caller's mesh is never mutated.
+    # Add all-ones mask scalar to identify interior grid points after probing.
+    mesh_copy = mesh.copy(deep=False)
+    mesh_copy.point_data[_MASK_FIELD] = np.ones(mesh_copy.n_points, dtype=np.float32)
 
-    scalars = np.array(result.point_data[scalar_field], dtype=np.float32)
+    # Probe: interpolate both scalars from mesh cells onto grid points.
+    # Grid points outside all mesh cells receive the VTK fill value, which
+    # probe() maps to 0.0 for float arrays (mask will also be 0 there).
+    result = grid.sample(mesh_copy)
 
-    # VTK flat index ordering: ix + iy*nx + iz*nx*ny  (X varies fastest)
-    # C-order reshape to (nz, ny, nx) maps correctly: index = iz*(ny*nx) + iy*nx + ix
-    volume = scalars.reshape((nz, ny, nx))
+    # VTK flat index ordering: ix + iy*nx + iz*nx*ny  (X varies fastest).
+    # C-order reshape to (nz, ny, nx) is correct: index = iz*(ny*nx) + iy*nx + ix
+    def _to_volume(field: str) -> np.ndarray:
+        arr = np.array(result.point_data[field], dtype=np.float32)
+        vol = arr.reshape((nz, ny, nx))
+        return np.nan_to_num(vol, nan=0.0)
 
-    # Replace any NaN fill values from probe with 0.0
-    volume = np.nan_to_num(volume, nan=0.0)
+    scar_volume = _to_volume(scalar_field)
+    mask_volume = _to_volume(_MASK_FIELD)  # > 0 where inside mesh cells
+
+    # Compose: background=0, interior=base_value+scar, clipped to [0,1]
+    interior = mask_volume > 0.0
+    volume = np.zeros((nz, ny, nx), dtype=np.float32)
+    volume[interior] = np.clip(base_value + scar_volume[interior], 0.0, 1.0)
+
+    logger.debug(
+        f"  Interior voxels: {interior.sum():,} / {interior.size:,} "
+        f"({100 * interior.sum() / interior.size:.1f}%)"
+    )
 
     origin = (float(ox), float(oy), float(oz))
     spacing = (float(voxel_size), float(voxel_size), float(voxel_size))
