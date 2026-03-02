@@ -61,7 +61,8 @@ echo "$(date)"
 cardioscar prepare \
     --mesh-vtk "$MESH_VTK" \
     --image "$IMAGE_NIFTI" \
-    --output "$TRAINING_DATA"
+    --output "$TRAINING_DATA" \
+    --exclude-zero-intensity 
 
 echo "[STAGE 1/3] Done. Output: $TRAINING_DATA"
 
