@@ -71,7 +71,13 @@ def cli():
               help='Output path for training data (.npz)')
 @click.option('--slice-thickness-padding', type=float, default=5.0,
               help='Z-direction padding (mm) for slice thickness')
-def prepare(mesh_vtk, grid_layers, vtk_scalar_field, image, slice_axis, slice_indices, output, slice_thickness_padding):
+@click.option('--exclude-zero-intensity', is_flag=True, default=False,
+              help=(
+                  'Exclude nodes with intensity 0.0 from training data. '
+                  'Use for synthetic rasterized images where 0.0 means '
+                  'outside-mesh padding. Do not use for real LGE images.'
+              ))
+def prepare(mesh_vtk, grid_layers, vtk_scalar_field, image, slice_axis, slice_indices, output, slice_thickness_padding, exclude_zero_intensity):
     """Prepare training data from mesh and slices."""
     from cardioscar.logic.orchestrators import prepare_training_data, save_preprocessing_result
     from cardioscar.logic.contracts import PreprocessingRequest
@@ -92,7 +98,8 @@ def prepare(mesh_vtk, grid_layers, vtk_scalar_field, image, slice_axis, slice_in
         slice_axis=slice_axis,
         slice_indices=parsed_indices,
         # Common
-        slice_thickness_padding=slice_thickness_padding
+        slice_thickness_padding=slice_thickness_padding,
+        exclude_zero_intensity=exclude_zero_intensity,
     )
     
     result = prepare_training_data(request)

@@ -44,6 +44,7 @@ class PreprocessingRequest:
     image_path: Optional[Path] = None
     slice_axis: Optional[str] = 'z' 
     slice_indices: Optional[List[int]] = None
+    exclude_zero_intensity: bool = False
 
     def __post_init__(self):
         """Validate that exactly one input method is provided."""

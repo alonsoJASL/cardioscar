@@ -291,6 +291,7 @@ def assemble_image_cell_data(
     node_indices: np.ndarray,
     group_ids: np.ndarray,
     intensities: np.ndarray,
+    exclude_zero_intensity: bool = False,
 ) -> np.ndarray:
     """
     Assemble sampled image data into the canonical cell_data format.
@@ -309,6 +310,10 @@ def assemble_image_cell_data(
         node_indices: (M,) indices into mesh_coords for sampled nodes.
         group_ids: (M,) voxel-based group ID per sampled node.
         intensities: (M,) normalised intensity values in [0, 1].
+        exclude_zero_intensity: If True, nodes with intensity exactly 0.0 are
+            removed before assembly. Use for synthetic rasterized data where
+            0.0 unambiguously means outside-mesh padding. Do NOT use for real
+            LGE images where zero intensity is valid signal.
 
     Returns:
         (M, 5) float32 array with columns:
@@ -329,6 +334,16 @@ def assemble_image_cell_data(
         >>> cell_data.shape  # (K, 5)
         (7077487, 5)
     """
+    if exclude_zero_intensity:
+        nonzero = intensities > 0.0
+        node_indices = node_indices[nonzero]
+        group_ids = group_ids[nonzero]
+        intensities = intensities[nonzero]
+        logger.info(
+            f"Excluded {(~nonzero).sum():,} zero-intensity nodes "
+            f"({100 * (~nonzero).sum() / len(nonzero):.1f}% of sampled nodes)"
+        )
+
     if len(node_indices) == 0:
         raise ValueError(
             "No valid mappings found. "

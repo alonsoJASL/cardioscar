@@ -104,6 +104,7 @@ def prepare_training_data(
             node_indices=node_indices,
             group_ids=group_ids,
             intensities=intensities,
+            exclude_zero_intensity=request.exclude_zero_intensity,
         )
     
     # 3. Post-process (same for both workflows)
