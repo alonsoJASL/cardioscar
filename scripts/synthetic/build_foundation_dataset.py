@@ -163,7 +163,8 @@ def concatenate_with_group_offset(
     ``scaler_min``, ``scaler_max``.
     """
     all_coords: List[np.ndarray] = []
-    all_targets: List[np.ndarray] = []
+    all_intensities: List[np.ndarray] = []
+    all_group_sizes: List[np.ndarray] = []
     all_group_ids: List[np.ndarray] = []
     scaler_min: Optional[np.ndarray] = None
     scaler_max: Optional[np.ndarray] = None
@@ -176,7 +177,7 @@ def concatenate_with_group_offset(
     for path in flat_files:
         data = load_npz(path)
 
-        for key in ("coordinates", "targets", "group_ids"):
+        for key in ("coordinates", "intensities", "group_ids"):
             if key not in data:
                 raise KeyError(
                     f"Expected key '{key}' not found in {path.name}. "
@@ -197,7 +198,9 @@ def concatenate_with_group_offset(
         n_groups_this_file = int(group_ids.max()) + 1
 
         all_coords.append(data["coordinates"])
-        all_targets.append(data["targets"])
+        all_intensities.append(data["intensities"])
+        if "group_sizes" in data:
+            all_group_sizes.append(data["group_sizes"])
         all_group_ids.append(group_ids + group_offset)
 
         group_offset += n_groups_this_file
@@ -212,9 +215,12 @@ def concatenate_with_group_offset(
 
     combined: Dict[str, np.ndarray] = {
         "coordinates": np.concatenate(all_coords, axis=0),
-        "targets": np.concatenate(all_targets, axis=0),
+        "intensities": np.concatenate(all_intensities, axis=0),
         "group_ids": np.concatenate(all_group_ids, axis=0),
     }
+    if all_group_sizes:
+        combined["group_sizes"] = np.concatenate(all_group_sizes, axis=0)
+
     if scaler_min is not None:
         combined["scaler_min"] = scaler_min
         combined["scaler_max"] = scaler_max  # type: ignore[assignment]
