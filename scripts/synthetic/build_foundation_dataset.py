@@ -320,7 +320,7 @@ def build(
         "  coordinates : %s  dtype=%s", combined["coordinates"].shape, combined["coordinates"].dtype
     )
     log.info(
-        "  targets      : %s  dtype=%s", combined["targets"].shape, combined["targets"].dtype
+        "  intensities      : %s  dtype=%s", combined["intensities"].shape, combined["intensities"].dtype
     )
     log.info(
         "  group_ids    : %s  dtype=%s  max_group=%d",
