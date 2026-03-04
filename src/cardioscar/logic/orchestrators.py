@@ -48,7 +48,7 @@ from cardioscar.utilities.batching import (
     ScarReconstructionDataset,
     create_complete_group_batches
 )
-from cardioscar.training.config import TrainingConfig
+from cardioscar.training.config import TrainingConfig, FineTuneConfig
 from cardioscar.training.trainer import train_model
 from cardioscar.engines import BayesianNN
 from cardioscar.logic.reconstruction import ReconstructionLogic
@@ -272,6 +272,139 @@ def save_trained_model(checkpoint: dict, output_path: Path) -> None:
     logger.info(f"  Final loss: {checkpoint['history']['losses'][-1]:.6f}")
     logger.info(f"  Best loss: {checkpoint['history']['best_loss']:.6f}")
     logger.info(f"  Converged in {checkpoint['history']['converged_epoch']} epochs")
+
+# =============================================================================
+# FINE-TUNING ORCHESTRATOR
+# =============================================================================
+
+def fine_tune_scar_model(
+    training_data_path: Path,
+    checkpoint_path: Path,
+    config: FineTuneConfig,
+    device: Optional[torch.device] = None
+) -> dict:
+    """
+    Orchestrate fine-tuning of a pretrained scar reconstruction model.
+
+    Loads a pretrained checkpoint, optionally freezes early network stages,
+    and continues training on new data using a lower learning rate schedule.
+
+    Workflow:
+        1. Load pretrained checkpoint and restore model weights
+        2. Freeze requested network stages (if any)
+        3. Load fine-tuning training data
+        4. Create dataset and batches
+        5. Train with early stopping
+        6. Return checkpoint with provenance recorded
+
+    Args:
+        training_data_path: Path to .npz fine-tuning training data
+        checkpoint_path: Path to pretrained .pth checkpoint
+        config: FineTuneConfig controlling LR, epochs, and layer freezing
+        device: torch.device (auto-detected if None)
+
+    Returns:
+        Checkpoint dictionary in the same structure as train_scar_model(),
+        with an additional 'fine_tuned_from' key recording the source path.
+
+    Example:
+        >>> config = FineTuneConfig(freeze_stages=2)
+        >>> checkpoint = fine_tune_scar_model(
+        ...     training_data_path=Path("patient_001.npz"),
+        ...     checkpoint_path=Path("foundation_model.pth"),
+        ...     config=config
+        ... )
+        >>> checkpoint['fine_tuned_from']
+        'foundation_model.pth'
+    """
+    if device is None:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    torch.manual_seed(config.training.seed)
+    if device.type == 'cuda':
+        torch.cuda.manual_seed_all(config.training.seed)
+
+    logger.info(f"Using device: {device}")
+
+    # 1. Load pretrained checkpoint
+    logger.info(f"Loading pretrained checkpoint: {checkpoint_path}")
+    pretrained = torch.load(checkpoint_path, map_location=device)
+
+    model = BayesianNN(
+        dropout_rate=pretrained['hyperparameters']['dropout_rate']
+    ).to(device)
+    model.load_state_dict(pretrained['model_state_dict'])
+    logger.info(f"  Restored weights from checkpoint")
+    logger.info(f"  Checkpoint best loss: {pretrained['history']['best_loss']:.6f}")
+
+    # 2. Freeze stages if requested
+    frozen_range = config.frozen_child_range()
+    if frozen_range is not None:
+        start, end = frozen_range
+        frozen_count = 0
+        for i, child in enumerate(model.network.children()):
+            if start <= i < end:
+                for param in child.parameters():
+                    param.requires_grad = False
+                frozen_count += 1
+        trainable_params = sum(
+            p.numel() for p in model.parameters() if p.requires_grad
+        )
+        logger.info(
+            f"  Froze stages 1-{config.freeze_stages} "
+            f"({frozen_count} children, {trainable_params:,} parameters remaining trainable)"
+        )
+    else:
+        logger.info(
+            f"  No stages frozen - full fine-tune "
+            f"({model.count_parameters():,} parameters trainable)"
+        )
+
+    # 3. Load fine-tuning data
+    logger.info(f"Loading fine-tuning data: {training_data_path}")
+    data = np.load(training_data_path)
+
+    dataset = ScarReconstructionDataset(
+        coordinates=data['coordinates'],
+        intensities=data['intensities'],
+        group_ids=data['group_ids'],
+        group_sizes=data['group_sizes']
+    )
+
+    # 4. Create complete-group batches
+    batches = create_complete_group_batches(dataset, config.training.batch_size)
+
+    # 5. Train
+    history = train_model(
+        model=model,
+        dataset=dataset,
+        batches=batches,
+        config=config.training,
+        device=device
+    )
+
+    # 6. Prepare checkpoint
+    checkpoint = {
+        'model_state_dict': model.state_dict(),
+        'history': history,
+        'hyperparameters': {
+            'dropout_rate': model.dropout_rate,
+            'mc_samples': config.training.mc_samples,
+            'batch_size': config.training.batch_size,
+            'base_lr': config.training.base_lr,
+            'max_lr': config.training.max_lr,
+        },
+        'dataset_info': {
+            'n_nodes': len(dataset),
+            'n_groups': len(dataset.group_sizes),
+            'scaler_min': data['scaler_min'],
+            'scaler_max': data['scaler_max'],
+        },
+        'fine_tuned_from': str(checkpoint_path),
+        'freeze_stages': config.freeze_stages,
+    }
+
+    return checkpoint
 
 
 # =============================================================================

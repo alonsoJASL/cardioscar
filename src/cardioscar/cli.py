@@ -143,6 +143,65 @@ def train(training_data, output, batch_size, max_epochs, early_stopping_patience
 
     save_trained_model(checkpoint, output)
 
+@cli.command()
+@click.option('--checkpoint', type=click.Path(exists=True, path_type=Path), required=True,
+              help='Path to pretrained foundation model (.pth)')
+@click.option('--training-data', type=click.Path(exists=True, path_type=Path), required=True,
+              help='Path to fine-tuning training data (.npz)')
+@click.option('--output', type=click.Path(path_type=Path), required=True,
+              help='Output path for fine-tuned model (.pth)')
+@click.option('--freeze-stages', type=int, default=0,
+              help=(
+                  'Number of network stages to freeze (0-4). '
+                  'Stage 1: Linear(3→128)+ReLU. '
+                  'Stage 2: adds Linear(128→128)+Dropout+ReLU. '
+                  'Stage 3: adds Linear(128→128)+ReLU. '
+                  'Stage 4: adds Linear(128→128)+Dropout+ReLU. '
+                  'Output stage is always trainable. Default: 0 (full fine-tune).'
+              ))
+@click.option('--batch-size', type=int, default=10000,
+              help='Target batch size')
+@click.option('--max-epochs', type=int, default=1000,
+              help='Maximum fine-tuning epochs')
+@click.option('--early-stopping-patience', type=int, default=200,
+              help='Epochs without improvement before stopping')
+@click.option('--mc-samples', type=int, default=3,
+              help='MC Dropout samples during training')
+@click.option('--base-lr', type=float, default=1e-4,
+              help='Base learning rate (default: 1e-4, lower than training)')
+@click.option('--max-lr', type=float, default=1e-3,
+              help='Maximum learning rate (default: 1e-3, lower than training)')
+@click.option('--cpu', is_flag=True, default=False,
+              help='Force CPU usage (default: auto-detect GPU)')
+def fine_tune(checkpoint, training_data, output, freeze_stages, batch_size,
+              max_epochs, early_stopping_patience, mc_samples, base_lr, max_lr, cpu):
+    """Fine-tune a pretrained scar reconstruction model on new data."""
+    from cardioscar.training.config import TrainingConfig, FineTuneConfig
+    from cardioscar.logic.orchestrators import fine_tune_scar_model, save_trained_model
+
+    config = FineTuneConfig(
+        training=TrainingConfig(
+            batch_size=batch_size,
+            max_epochs=max_epochs,
+            early_stopping_patience=early_stopping_patience,
+            mc_samples=mc_samples,
+            base_lr=base_lr,
+            max_lr=max_lr,
+        ),
+        freeze_stages=freeze_stages,
+    )
+
+    device = get_device(force_cpu=cpu)
+
+    checkpoint_data = fine_tune_scar_model(
+        training_data_path=training_data,
+        checkpoint_path=checkpoint,
+        config=config,
+        device=device,
+    )
+
+    save_trained_model(checkpoint_data, output)
+
 
 @cli.command()
 @click.option('--model', type=click.Path(exists=True, path_type=Path), required=True,
