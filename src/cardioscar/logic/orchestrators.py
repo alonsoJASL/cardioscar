@@ -328,7 +328,7 @@ def fine_tune_scar_model(
 
     # 1. Load pretrained checkpoint
     logger.info(f"Loading pretrained checkpoint: {checkpoint_path}")
-    pretrained = torch.load(checkpoint_path, map_location=device)
+    pretrained = torch.load(checkpoint_path, map_location=device, weights_only=False)
 
     model = BayesianNN(
         dropout_rate=pretrained['hyperparameters']['dropout_rate']
