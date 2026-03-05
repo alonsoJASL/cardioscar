@@ -48,7 +48,12 @@ from cardioscar.utilities.batching import (
     ScarReconstructionDataset,
     create_complete_group_batches
 )
-from cardioscar.training.config import TrainingConfig, FineTuneConfig
+from cardioscar.training.config import (
+    TrainingConfig, 
+    FineTuneConfig, 
+    DEFAULT_HIDDEN_SIZE, 
+    DEFAULT_N_HIDDEN_LAYERS
+)
 from cardioscar.training.trainer import train_model
 from cardioscar.engines import BayesianNN
 from cardioscar.logic.reconstruction import ReconstructionLogic
@@ -219,8 +224,12 @@ def train_scar_model(
     batches = create_complete_group_batches(dataset, config.batch_size)
     
     # 3. Initialize model
-    logger.info("Initializing BayesianNN model")
-    model = BayesianNN(dropout_rate=config.dropout_rate).to(device)
+    logger.info("Initialising BayesianNN model")
+    model = BayesianNN(
+        dropout_rate=config.dropout_rate,
+        hidden_size=config.hidden_size,
+        n_hidden_layers=config.n_hidden_layers,
+    ).to(device)
     
     total_params = model.count_parameters()
     logger.info(f"  Total parameters: {total_params:,}")
@@ -240,10 +249,12 @@ def train_scar_model(
         'history': history,
         'hyperparameters': {
             'dropout_rate': config.dropout_rate,
+            'hidden_size': config.hidden_size,
+            'n_hidden_layers': config.n_hidden_layers,
             'mc_samples': config.mc_samples,
             'batch_size': config.batch_size,
             'base_lr': config.base_lr,
-            'max_lr': config.max_lr
+            'max_lr': config.max_lr,
         },
         'dataset_info': {
             'n_nodes': len(dataset),
@@ -331,7 +342,9 @@ def fine_tune_scar_model(
     pretrained = torch.load(checkpoint_path, map_location=device, weights_only=False)
 
     model = BayesianNN(
-        dropout_rate=pretrained['hyperparameters']['dropout_rate']
+        dropout_rate=pretrained['hyperparameters']['dropout_rate'],
+        hidden_size=pretrained['hyperparameters'].get('hidden_size', DEFAULT_HIDDEN_SIZE),
+        n_hidden_layers=pretrained['hyperparameters'].get('n_hidden_layers', DEFAULT_N_HIDDEN_LAYERS),
     ).to(device)
     model.load_state_dict(pretrained['model_state_dict'])
     logger.info(f"  Restored weights from checkpoint")

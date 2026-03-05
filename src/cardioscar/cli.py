@@ -16,6 +16,7 @@ from pycemrg.core.logs import setup_logging
 setup_logging()
 logger = logging.getLogger(__name__)
 
+from cardioscar.training.config import DEFAULT_HIDDEN_SIZE, DEFAULT_N_HIDDEN_LAYERS
 
 def get_device(force_cpu: bool = False) -> torch.device:
     """
@@ -119,9 +120,15 @@ def prepare(mesh_vtk, grid_layers, vtk_scalar_field, image, slice_axis, slice_in
               help='Epochs without improvement before stopping')
 @click.option('--mc-samples', type=int, default=3,
               help='MC Dropout samples during training')
+@click.option('--hidden-size', type=int, default=DEFAULT_HIDDEN_SIZE,
+              help=f'Neurons per hidden layer (default: {DEFAULT_HIDDEN_SIZE})')
+@click.option('--hidden-layers', type=int, default=DEFAULT_N_HIDDEN_LAYERS,
+              help=f'Number of hidden layers (default: {DEFAULT_N_HIDDEN_LAYERS})')
 @click.option('--cpu', is_flag=True, default=False,
               help='Force CPU usage (default: auto-detect GPU)')
-def train(training_data, output, batch_size, max_epochs, early_stopping_patience, mc_samples, cpu):
+def train(training_data, output, batch_size, max_epochs, early_stopping_patience,
+          mc_samples, hidden_size, hidden_layers, cpu):
+
     """Train scar reconstruction model."""
     from cardioscar.training.config import TrainingConfig
     from cardioscar.logic.orchestrators import train_scar_model, save_trained_model
@@ -131,6 +138,8 @@ def train(training_data, output, batch_size, max_epochs, early_stopping_patience
         max_epochs=max_epochs,
         early_stopping_patience=early_stopping_patience,
         mc_samples=mc_samples,
+        hidden_size=hidden_size,
+        n_hidden_layers=hidden_layers,
     )
 
     device = get_device(force_cpu=cpu)
@@ -174,7 +183,8 @@ def train(training_data, output, batch_size, max_epochs, early_stopping_patience
 @click.option('--cpu', is_flag=True, default=False,
               help='Force CPU usage (default: auto-detect GPU)')
 def fine_tune(checkpoint, training_data, output, freeze_stages, batch_size,
-              max_epochs, early_stopping_patience, mc_samples, base_lr, max_lr, cpu):
+              max_epochs, early_stopping_patience, mc_samples, base_lr, max_lr,
+              cpu):
     """Fine-tune a pretrained scar reconstruction model on new data."""
     from cardioscar.training.config import TrainingConfig, FineTuneConfig
     from cardioscar.logic.orchestrators import fine_tune_scar_model, save_trained_model
@@ -187,9 +197,12 @@ def fine_tune(checkpoint, training_data, output, freeze_stages, batch_size,
             mc_samples=mc_samples,
             base_lr=base_lr,
             max_lr=max_lr,
+            # default hidden_size and n_hidden_layers will be 
+            # overridden by checkpoint hyperparameters
         ),
         freeze_stages=freeze_stages,
     )
+
 
     device = get_device(force_cpu=cpu)
 

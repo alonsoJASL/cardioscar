@@ -16,6 +16,7 @@ import torch
 
 from cardioscar.engines import BayesianNN
 from cardioscar.logic.contracts import InferenceRequest, InferenceResult
+from cardioscar.training.config import DEFAULT_HIDDEN_SIZE, DEFAULT_N_HIDDEN_LAYERS
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +74,15 @@ class ReconstructionLogic:
         
         # Initialize model
         dropout_rate = checkpoint['hyperparameters']['dropout_rate']
-        model = BayesianNN(dropout_rate=dropout_rate).to(device)
+        hidden_size = checkpoint['hyperparameters'].get('hidden_size', DEFAULT_HIDDEN_SIZE)
+        n_hidden_layers = checkpoint['hyperparameters'].get('n_hidden_layers', DEFAULT_N_HIDDEN_LAYERS)
+
+        model = BayesianNN(
+            dropout_rate=dropout_rate,
+            hidden_size=hidden_size,
+            n_hidden_layers=n_hidden_layers,
+        ).to(device)
+
         model.load_state_dict(checkpoint['model_state_dict'])
         model.eval()
         
@@ -84,8 +93,11 @@ class ReconstructionLogic:
         metadata = {
             'training_nodes': checkpoint['dataset_info']['n_nodes'],
             'training_groups': checkpoint['dataset_info']['n_groups'],
-            'dropout_rate': dropout_rate
+            'dropout_rate': dropout_rate,
+            'hidden_size': hidden_size,
+            'n_hidden_layers': n_hidden_layers,
         }
+
         
         logger.info("Model loaded successfully")
         logger.info(f"  Dropout rate: {dropout_rate}")
