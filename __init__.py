@@ -21,7 +21,7 @@ Authors:
 License: MIT
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __author__ = "Ahmet Sen, Jose Alonso Solis-Lemus, Martin J. Bishop"
 __license__ = "MIT"
 

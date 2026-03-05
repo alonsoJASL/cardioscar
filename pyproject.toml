@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cardioscar"
-version = "0.1.0"
+version = "0.2.0"
 authors = [
   { name="Jose Alonso Solis-Lemus", email="j.solis-lemus@imperial.ac.uk" },
   { name="Martin J. Bishop", email="martin.bishop@kcl.ac.uk" },

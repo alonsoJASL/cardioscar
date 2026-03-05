@@ -40,7 +40,7 @@ def get_device(force_cpu: bool = False) -> torch.device:
 
 
 @click.group()
-@click.version_option(version="0.1.0")
+@click.version_option(version="0.2.0")
 def cli():
     """
     CardioScar: Deep learning-based 3D myocardial scar reconstruction.

@@ -501,7 +501,7 @@ If you use CardioScar in your research, please cite:
   author={Sen, Ahmet and Bishop, Martin J. and Solis-Lemus, Jose Alonso},
   year={2024},
   url={https://github.com/alonsoJASL/cardioscar},
-  version={0.1.0}
+  version={0.2.0}
 }
 ```
 
@@ -544,5 +544,5 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ---
 
-**Version:** 0.1.0
+**Version:** 0.2.0
 **Last Updated:** March 2026

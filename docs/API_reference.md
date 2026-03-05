@@ -1,6 +1,6 @@
 # CardioScar API Reference
 
-**Version:** 0.1.0  
+**Version:** 0.2.0  
 **Authors:** Ahmet Sen, Martin J. Bishop, Jose Alonso Solis-Lemus
 
 Deep learning-based 3D myocardial scar reconstruction from sparse 2D LGE-CMR slices.
@@ -1061,11 +1061,11 @@ Layer freezing is only implemented for the default 4-layer architecture. Use `fr
   author={Sen, Ahmet and Bishop, Martin J. and Solis-Lemus, Jose Alonso},
   year={2024},
   url={https://github.com/alonsoJASL/cardioscar},
-  version={0.1.0}
+  version={0.2.0}
 }
 ```
 
 ---
 
-**Version:** 0.1.0  
+**Version:** 0.2.0  
 **Last Updated:** March 2026
