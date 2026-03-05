@@ -107,10 +107,11 @@ cardioscar apply \
     --mc-samples 20
 ```
 
-### Foundation Model + Fine-Tune Workflow
+### Transfer learning + Fine-Tune Workflow
 
+First, prepare all the data you have available 
 ```bash
-# 1. Build foundation dataset from cohort
+# 1. Build foundation dataset from cohort - this is work in progress
 python scripts/build_foundation_dataset.py \
     --input-dir prepare_outputs/ \
     --output-dir foundation/ \
@@ -130,6 +131,8 @@ cardioscar fine-tune \
     --training-data patient_001_training.npz \
     --output patient_001_finetuned.pth
 ```
+
+Finally, run `cardioscar apply` on the fine-tuned model. 
 
 ### Python API
 
@@ -462,7 +465,7 @@ Monte Carlo Dropout provides:
 - **High uncertainty regions**: Areas where model is less confident (e.g., sparse data, ambiguous boundaries)
 - **Quality control**: Flag regions requiring manual review or additional imaging
 
-### Foundation Model + Fine-Tuning
+### Transfer Learning Model + Fine-Tuning
 
 For cohort studies, a foundation model can be trained on multiple patients and then fine-tuned per patient:
 - Foundation training captures shared cardiac anatomy representations
