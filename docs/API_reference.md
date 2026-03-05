@@ -1,7 +1,3 @@
-Perfect! Here's your comprehensive API reference:
-
----
-
 # CardioScar API Reference
 
 **Version:** 0.1.0  
@@ -43,8 +39,8 @@ pip install -e .
 ```
 
 ### Dependencies
-- Python ≥ 3.10
-- PyTorch ≥ 2.0
+- Python >= 3.10
+- PyTorch >= 2.0
 - PyVista
 - SimpleITK
 - scikit-learn
@@ -220,6 +216,8 @@ cardioscar train \
 | `--max-epochs`              | int  | No       | 10000   | Maximum training epochs                               |
 | `--early-stopping-patience` | int  | No       | 500     | Epochs without improvement before stopping            |
 | `--mc-samples`              | int  | No       | 3       | MC Dropout samples during training                    |
+| `--hidden-size`             | int  | No       | 128     | Neurons per hidden layer                              |
+| `--hidden-layers`           | int  | No       | 4       | Number of hidden layers                               |
 | `--cpu`                     | flag | No       | False   | Force CPU usage (default: auto-detect GPU)            |
 
 **Example:**
@@ -229,12 +227,12 @@ cardioscar train \
     --training-data data.npz \
     --output model.pth
 
-# High-quality (slower)
+# Larger architecture
 cardioscar train \
     --training-data data.npz \
     --output model.pth \
-    --mc-samples 5 \
-    --early-stopping-patience 1000
+    --hidden-size 256 \
+    --hidden-layers 4
 
 # Fast prototyping
 cardioscar train \
@@ -244,7 +242,66 @@ cardioscar train \
     --early-stopping-patience 100
 ```
 
-**Training Time:** ~6-10 minutes on GPU for typical datasets (20-30k nodes)
+**Training Time:** ~2 minutes on GPU for typical single-patient datasets (~290k nodes)
+
+---
+
+### `cardioscar fine-tune`
+
+Fine-tune a pretrained foundation model on new patient data.
+
+Architecture (hidden size, number of layers) is always restored from the
+checkpoint and cannot be overridden at fine-tune time.
+
+```bash
+cardioscar fine-tune \
+    --checkpoint FOUNDATION.pth \
+    --training-data PATIENT.npz \
+    --output FINETUNED.pth \
+    [OPTIONS]
+```
+
+**Options:**
+
+| Option                      | Type  | Required | Default | Description                                              |
+| --------------------------- | ----- | -------- | ------- | -------------------------------------------------------- |
+| `--checkpoint`              | Path  | Yes      | -       | Path to pretrained foundation model (.pth)               |
+| `--training-data`           | Path  | Yes      | -       | Path to fine-tuning training data (.npz)                 |
+| `--output`                  | Path  | Yes      | -       | Output path for fine-tuned model (.pth)                  |
+| `--freeze-stages`           | int   | No       | 0       | Stages to freeze (0-4). 0 = full fine-tune (recommended) |
+| `--batch-size`              | int   | No       | 10000   | Target batch size                                        |
+| `--max-epochs`              | int   | No       | 1000    | Maximum fine-tuning epochs                               |
+| `--early-stopping-patience` | int   | No       | 200     | Epochs without improvement before stopping               |
+| `--mc-samples`              | int   | No       | 3       | MC Dropout samples during training                       |
+| `--base-lr`                 | float | No       | 1e-4    | Base learning rate (lower than scratch training)         |
+| `--max-lr`                  | float | No       | 1e-3    | Maximum learning rate (lower than scratch training)      |
+| `--cpu`                     | flag  | No       | False   | Force CPU usage (default: auto-detect GPU)               |
+
+**Example:**
+```bash
+# Full fine-tune (recommended)
+cardioscar fine-tune \
+    --checkpoint foundation_model.pth \
+    --training-data patient_001.npz \
+    --output patient_001_finetuned.pth
+
+# Frozen backbone (experimental - only valid for 4-layer models)
+cardioscar fine-tune \
+    --checkpoint foundation_model.pth \
+    --training-data patient_001.npz \
+    --output patient_001_finetuned.pth \
+    --freeze-stages 2
+```
+
+**Freeze stages** (valid for default 4-layer architecture only):
+
+| Value | Frozen layers                      |
+| ----- | ---------------------------------- |
+| 0     | None (full fine-tune, recommended) |
+| 1     | Linear(3→H) + ReLU                 |
+| 2     | + Linear(H→H) + Dropout + ReLU     |
+| 3     | + Linear(H→H) + ReLU               |
+| 4     | + Linear(H→H) + Dropout + ReLU     |
 
 ---
 
@@ -321,13 +378,13 @@ def prepare_training_data(
 ) -> PreprocessingResult:
     """
     Orchestrate training data preparation from mesh and slices.
-    
+
     Args:
         request: PreprocessingRequest specifying inputs and parameters
-    
+
     Returns:
         PreprocessingResult with training arrays and metadata
-    
+
     Raises:
         ValueError: If no valid mappings found (slices don't overlap mesh)
     """
@@ -347,28 +404,11 @@ print(f"Prepared {result.n_nodes} nodes in {result.n_groups} groups")
 
 ---
 
-#### `save_preprocessing_result()`
-
-```python
-def save_preprocessing_result(
-    result: PreprocessingResult, 
-    output_path: Path
-) -> None:
-    """
-    Save preprocessing result to .npz file.
-    
-    Args:
-        result: PreprocessingResult from prepare_training_data()
-        output_path: Output path for .npz file
-    """
-```
-
----
-
 #### `train_scar_model()`
 
 ```python
-from cardioscar.logic import train_scar_model, TrainingConfig
+from cardioscar.logic import train_scar_model
+from cardioscar.training.config import TrainingConfig
 import torch
 
 def train_scar_model(
@@ -378,21 +418,21 @@ def train_scar_model(
 ) -> dict:
     """
     Orchestrate model training workflow.
-    
+
     Args:
         training_data_path: Path to .npz training data
-        config: Training configuration
+        config: Training configuration (includes hidden_size, n_hidden_layers)
         device: torch.device (auto-detected if None)
-    
+
     Returns:
         Dictionary containing:
         - 'model_state_dict': Trained model weights
         - 'history': Training history (losses, learning rates)
-        - 'hyperparameters': Model and training config
+        - 'hyperparameters': Model config including hidden_size, n_hidden_layers
         - 'dataset_info': Scaler params and metadata
-    
+
     Example:
-        >>> config = TrainingConfig(max_epochs=5000)
+        >>> config = TrainingConfig(max_epochs=5000, hidden_size=256)
         >>> checkpoint = train_scar_model(Path("data.npz"), config)
         >>> print(f"Best loss: {checkpoint['history']['best_loss']:.4f}")
     """
@@ -400,19 +440,46 @@ def train_scar_model(
 
 ---
 
-#### `save_trained_model()`
+#### `fine_tune_scar_model()`
 
 ```python
-def save_trained_model(
-    checkpoint: dict, 
-    output_path: Path
-) -> None:
+from cardioscar.logic import fine_tune_scar_model
+from cardioscar.training.config import FineTuneConfig
+
+def fine_tune_scar_model(
+    training_data_path: Path,
+    checkpoint_path: Path,
+    config: FineTuneConfig,
+    device: Optional[torch.device] = None
+) -> dict:
     """
-    Save trained model checkpoint.
-    
+    Orchestrate fine-tuning of a pretrained scar reconstruction model.
+
+    Loads a pretrained checkpoint, restores architecture from its hyperparameters,
+    optionally freezes early network stages, and continues training on new data
+    using a lower learning rate schedule.
+
     Args:
-        checkpoint: Dictionary from train_scar_model()
-        output_path: Output path for .pth file
+        training_data_path: Path to .npz fine-tuning training data
+        checkpoint_path: Path to pretrained .pth checkpoint
+        config: FineTuneConfig controlling LR, epochs, and layer freezing
+        device: torch.device (auto-detected if None)
+
+    Returns:
+        Checkpoint dictionary in the same structure as train_scar_model(),
+        with additional keys:
+        - 'fine_tuned_from': Source checkpoint path (str)
+        - 'freeze_stages': Number of stages frozen (int)
+
+    Example:
+        >>> config = FineTuneConfig(freeze_stages=0)
+        >>> checkpoint = fine_tune_scar_model(
+        ...     training_data_path=Path("patient_001.npz"),
+        ...     checkpoint_path=Path("foundation_model.pth"),
+        ...     config=config
+        ... )
+        >>> checkpoint['fine_tuned_from']
+        'foundation_model.pth'
     """
 ```
 
@@ -433,7 +500,9 @@ def apply_scar_model(
 ) -> InferenceResult:
     """
     Orchestrate model inference on mesh.
-    
+
+    Architecture is restored automatically from the checkpoint hyperparameters.
+
     Args:
         model_checkpoint_path: Path to trained .pth checkpoint
         mesh_path: Path to input mesh (VTK)
@@ -441,10 +510,10 @@ def apply_scar_model(
         batch_size: Batch size for inference
         threshold: Optional threshold for binary classification
         device: torch.device (auto-detected if None)
-    
+
     Returns:
         InferenceResult with predictions and metadata
-    
+
     Example:
         >>> result = apply_scar_model(
         ...     Path("model.pth"),
@@ -452,32 +521,6 @@ def apply_scar_model(
         ...     mc_samples=20
         ... )
         >>> print(f"Mean scar probability: {result.mean_scar_probability:.3f}")
-        >>> print(f"Mean uncertainty: {result.mean_uncertainty:.3f}")
-    """
-```
-
----
-
-#### `save_inference_result()`
-
-```python
-def save_inference_result(
-    result: InferenceResult,
-    mesh_path: Path,
-    output_path: Path
-) -> None:
-    """
-    Save inference result as augmented mesh.
-    
-    Args:
-        result: InferenceResult from apply_scar_model()
-        mesh_path: Original mesh path (to load structure)
-        output_path: Output path for augmented mesh
-    
-    Adds scalar fields:
-        - 'scar_probability': Mean predictions
-        - 'scar_uncertainty': Standard deviation
-        - 'scar_binary': Binary classification (if threshold provided)
     """
 ```
 
@@ -485,55 +528,27 @@ def save_inference_result(
 
 ### Data Contracts
 
-Dataclasses defining explicit interfaces between components.
-
 #### `PreprocessingRequest`
 
 ```python
-from cardioscar.logic import PreprocessingRequest
-from pathlib import Path
-
 @dataclass
 class PreprocessingRequest:
     """
     Request to create training data from mesh and slices.
-    
+
     Attributes:
         mesh_path: Path to 3D target mesh (VTK)
         slice_thickness_padding: Z-direction padding (mm)
-        
+
         # VTK Grid Input
         vtk_grid_paths: List of paths to VTK grid files
         vtk_scalar_field: Name of scalar field in VTK grids
-        
+
         # Image Input
         image_path: Path to medical image (NIfTI, NRRD)
         slice_axis: Axis to slice along ('x', 'y', 'z')
         slice_indices: List of slice indices (None = all slices)
-    
-    Validation:
-        Exactly one of vtk_grid_paths OR image_path must be provided.
     """
-```
-
-**Example:**
-```python
-# VTK input
-request = PreprocessingRequest(
-    mesh_path=Path("mesh.vtk"),
-    vtk_grid_paths=[Path(f"slice_{i}.vtk") for i in range(10)],
-    vtk_scalar_field="ScalarValue",
-    slice_thickness_padding=5.0
-)
-
-# Image input
-request = PreprocessingRequest(
-    mesh_path=Path("mesh.vtk"),
-    image_path=Path("lge.nii.gz"),
-    slice_axis='z',
-    slice_indices=[5, 10, 15, 20],
-    slice_thickness_padding=5.0
-)
 ```
 
 ---
@@ -545,7 +560,7 @@ request = PreprocessingRequest(
 class PreprocessingResult:
     """
     Result of spatial mapping preprocessing.
-    
+
     Attributes:
         coordinates: (N, 3) normalized mesh coordinates [0, 1]
         intensities: (N, 1) target scar values
@@ -560,25 +575,6 @@ class PreprocessingResult:
 
 ---
 
-#### `InferenceRequest`
-
-```python
-@dataclass
-class InferenceRequest:
-    """
-    Request to apply trained model to mesh.
-    
-    Attributes:
-        model_checkpoint_path: Path to trained .pth checkpoint
-        mesh_path: Path to input mesh (VTK)
-        mc_samples: Number of MC Dropout samples
-        batch_size: Batch size for inference
-        threshold: Optional threshold for binary classification
-    """
-```
-
----
-
 #### `InferenceResult`
 
 ```python
@@ -586,7 +582,7 @@ class InferenceRequest:
 class InferenceResult:
     """
     Result of model inference on mesh.
-    
+
     Attributes:
         mean_predictions: (N,) mean scar probability per node [0, 1]
         std_predictions: (N,) uncertainty (std) per node
@@ -605,22 +601,28 @@ class InferenceResult:
 
 ```python
 from cardioscar.engines import BayesianNN
-import torch.nn as nn
 
 class BayesianNN(nn.Module):
     """
-    Bayesian neural network with MC Dropout for uncertainty estimation.
-    
-    Architecture:
-        Input(3) → Dense(128) → Dense(128) → Dropout(0.1) →
-        Dense(128) → Dense(128) → Dropout(0.1) →
-        Dense(128) → Dense(1, sigmoid) → Output
-    
-    Attributes:
+    Coordinate-based Bayesian neural network with MC Dropout.
+
+    Maps (X, Y, Z) -> scar probability [0, 1].
+
+    Args:
         dropout_rate: Dropout probability (default: 0.1)
-    
+        hidden_size: Neurons per hidden layer (default: 128)
+        n_hidden_layers: Number of hidden layers (default: 4)
+
+    Architecture (defaults):
+        Input(3) -> Dense(128) -> Dense(128) -> Dropout(0.1) ->
+        Dense(128) -> Dense(128) -> Dropout(0.1) ->
+        Dense(1, sigmoid) -> Output
+
+        Dropout is inserted after every second hidden layer.
+        Output layer is never frozen during fine-tuning.
+
     Methods:
-        forward(x, training=False): Forward pass
+        forward(x): Forward pass
         enable_dropout(): Enable dropout for MC sampling
         count_parameters(): Count trainable parameters
     """
@@ -628,12 +630,13 @@ class BayesianNN(nn.Module):
 
 **Example:**
 ```python
-model = BayesianNN(dropout_rate=0.1)
-print(f"Parameters: {model.count_parameters():,}")  # 50,177
+# Default architecture (50,177 parameters)
+model = BayesianNN()
+print(f"Parameters: {model.count_parameters():,}")
 
-# Standard inference
-model.eval()
-output = model(input_coords)
+# Wider architecture (198,657 parameters)
+model = BayesianNN(hidden_size=256, n_hidden_layers=4)
+print(f"Parameters: {model.count_parameters():,}")
 
 # MC Dropout inference
 model.eval()
@@ -655,26 +658,25 @@ def compute_group_reconstruction_loss(
     targets: torch.Tensor,
     group_ids: torch.Tensor,
     return_per_group: bool = False
-) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+) -> torch.Tensor:
     """
-    Compute group-based reconstruction loss.
-    
+    Compute group-based reconstruction loss via scatter_add (fully vectorized).
+
     Enforces constraint: mean(predictions_in_group) = target_value
-    
+
+    Loss Formula:
+        For each group g:
+            loss_g = (mean(predictions[group_g]) - target_g)^2
+        Total loss = mean(loss_g for all groups)
+
     Args:
         predictions: (N,) predicted scar probabilities
         targets: (N,) target scar values (same per group)
         group_ids: (N,) group assignment per node
-        return_per_group: If True, return per-group losses
-    
+        return_per_group: If True, return per-group losses tensor
+
     Returns:
-        Scalar loss (or tuple of (loss, per_group_losses))
-    
-    Loss Formula:
-        For each group g:
-            loss_g = (mean(predictions[group_g]) - target_g)^2
-        
-        Total loss = mean(loss_g for all groups)
+        Scalar mean loss, or (N_groups,) per-group losses if return_per_group
     """
 ```
 
@@ -685,236 +687,120 @@ def compute_group_reconstruction_loss(
 #### `TrainingConfig`
 
 ```python
-from cardioscar.training import TrainingConfig
+from cardioscar.training.config import TrainingConfig, DEFAULT_HIDDEN_SIZE, DEFAULT_N_HIDDEN_LAYERS
 
 @dataclass
 class TrainingConfig:
     """
     Configuration for training BayesianNN model.
-    
+
     Attributes:
-        batch_size: Target batch size (actual varies for complete groups)
-        max_epochs: Maximum training epochs
-        early_stopping_patience: Epochs without improvement before stopping
-        mc_samples: Number of MC Dropout samples during training
-        dropout_rate: Dropout probability in model
-        base_lr: Minimum learning rate for cyclical schedule
-        max_lr: Maximum learning rate for cyclical schedule
-        lr_step_size: Iterations per half-cycle
-    
-    Defaults:
-        batch_size=10000
-        max_epochs=10000
-        early_stopping_patience=500
-        mc_samples=3
-        dropout_rate=0.1
-        base_lr=1e-3
-        max_lr=1e-2
-        lr_step_size=2000
-    
-    Validation:
-        Ensures all parameters are positive and reasonable.
+        batch_size: Target batch size (default: 10000)
+        max_epochs: Maximum training epochs (default: 10000)
+        early_stopping_patience: Epochs without improvement (default: 500)
+        mc_samples: MC Dropout samples during training (default: 3)
+        dropout_rate: Dropout probability (default: 0.1)
+        hidden_size: Neurons per hidden layer (default: DEFAULT_HIDDEN_SIZE=128)
+        n_hidden_layers: Number of hidden layers (default: DEFAULT_N_HIDDEN_LAYERS=4)
+        base_lr: Minimum learning rate for cyclical schedule (default: 1e-3)
+        max_lr: Maximum learning rate for cyclical schedule (default: 1e-2)
+        lr_step_size: Iterations per half-cycle (default: 2000)
+        seed: Random seed (default: 42)
     """
 ```
 
 **Example:**
 ```python
-# Default (recommended)
+# Default (recommended for single-patient training)
 config = TrainingConfig()
 
-# Fast prototyping
-config = TrainingConfig(
-    max_epochs=1000,
-    early_stopping_patience=100
-)
+# Wider architecture
+config = TrainingConfig(hidden_size=256, n_hidden_layers=4)
 
-# High-quality
+# Foundation model training (large batch, longer patience)
 config = TrainingConfig(
-    mc_samples=5,
-    early_stopping_patience=1000,
-    base_lr=5e-4,
-    max_lr=5e-3
+    batch_size=500000,
+    max_epochs=3000,
+    early_stopping_patience=500,
+    mc_samples=3,
 )
 ```
+
+---
+
+#### `FineTuneConfig`
+
+```python
+from cardioscar.training.config import FineTuneConfig
+
+@dataclass
+class FineTuneConfig:
+    """
+    Configuration for fine-tuning a pretrained BayesianNN checkpoint.
+
+    Composes a TrainingConfig with fine-tune-appropriate defaults and
+    adds layer-freezing control via freeze_stages.
+
+    Note:
+        Architecture (hidden_size, n_hidden_layers) is always restored
+        from the checkpoint. Values in the inner TrainingConfig are ignored
+        for architecture - they control only training hyperparameters.
+
+        freeze_stages is only supported for n_hidden_layers=4 (default).
+        Attempting to freeze stages on a different depth raises ValueError.
+
+    Attributes:
+        training: Inner TrainingConfig with fine-tune defaults:
+            max_epochs=1000, early_stopping_patience=200,
+            base_lr=1e-4, max_lr=1e-3 (10x lower than scratch)
+        freeze_stages: Stages to freeze (0-4). 0 = full fine-tune.
+
+    Methods:
+        frozen_child_range(): Returns (start, end) child indices to freeze,
+            or None if freeze_stages=0.
+    """
+```
+
+**Example:**
+```python
+# Full fine-tune (recommended)
+config = FineTuneConfig()
+
+# Frozen backbone
+config = FineTuneConfig(freeze_stages=2)
+
+# Custom training hyperparameters
+config = FineTuneConfig(
+    training=TrainingConfig(
+        max_epochs=2000,
+        early_stopping_patience=500,
+        base_lr=1e-4,
+        max_lr=1e-3,
+    ),
+    freeze_stages=0,
+)
+```
+
+---
+
+#### Architecture Constants
+
+```python
+from cardioscar.training.config import DEFAULT_HIDDEN_SIZE, DEFAULT_N_HIDDEN_LAYERS
+
+DEFAULT_HIDDEN_SIZE: int = 128      # Neurons per hidden layer
+DEFAULT_N_HIDDEN_LAYERS: int = 4    # Number of hidden layers
+```
+
+These are the single source of truth for default architecture. Used as
+fallback defaults when loading legacy checkpoints that predate architecture
+parameterisation.
 
 ---
 
 ### Utilities
 
-Low-level functions for data processing.
-
-#### I/O Functions
-
-##### `load_mesh_points()`
-
-```python
-from cardioscar.utilities import load_mesh_points
-
-def load_mesh_points(mesh_path: Path) -> np.ndarray:
-    """
-    Load mesh node coordinates from VTK file.
-    
-    Args:
-        mesh_path: Path to VTK mesh file
-    
-    Returns:
-        (N, 3) array of XYZ coordinates
-    """
-```
-
----
-
-##### `load_grid_layer_data()`
-
-```python
-def load_grid_layer_data(
-    grid_path: Path,
-    scalar_field_name: str = 'ScalarValue'
-) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Load 2D grid layer with cell bounds and scalar values.
-    
-    Args:
-        grid_path: Path to VTK grid file
-        scalar_field_name: Name of scalar field to extract
-    
-    Returns:
-        Tuple of:
-        - cell_bounds: (M, 6) array [xmin, xmax, ymin, ymax, zmin, zmax]
-        - scalar_values: (M,) array of scalar values per cell
-    """
-```
-
----
-
-##### `save_mesh_with_scalars()`
-
-```python
-def save_mesh_with_scalars(
-    mesh_path: Path,
-    output_path: Path,
-    scalar_fields: Dict[str, np.ndarray]
-) -> None:
-    """
-    Save mesh with additional scalar fields.
-    
-    Args:
-        mesh_path: Path to original mesh (for structure)
-        output_path: Path for output mesh
-        scalar_fields: Dict mapping field names to (N,) arrays
-    
-    Example:
-        >>> save_mesh_with_scalars(
-        ...     Path("mesh.vtk"),
-        ...     Path("output.vtk"),
-        ...     {
-        ...         'scar_probability': predictions,
-        ...         'scar_uncertainty': uncertainties
-        ...     }
-        ... )
-    """
-```
-
----
-
-#### Preprocessing Functions
-
-##### `process_vtk_grid_data()`
-
-```python
-from cardioscar.utilities import process_vtk_grid_data
-
-def process_vtk_grid_data(
-    mesh_coords: np.ndarray,
-    grid_layers_data: List[Tuple[np.ndarray, np.ndarray]],
-    z_padding: float = 5.0
-) -> np.ndarray:
-    """
-    Process VTK grid layer data and map to mesh nodes.
-    
-    Args:
-        mesh_coords: (N, 3) mesh node coordinates
-        grid_layers_data: List of (cell_bounds, scalar_values) tuples
-        z_padding: Z-direction padding (mm)
-    
-    Returns:
-        (K, 5) array [X, Y, Z, scalar_value, group_id] with unique nodes
-    
-    Note:
-        Pure function - no file I/O. Orchestrator handles loading.
-    """
-```
-
----
-
-##### `process_image_slice_data()`
-
-```python
-def process_image_slice_data(
-    mesh_coords: np.ndarray,
-    slice_layers_data: List[Tuple[np.ndarray, np.ndarray]],
-    z_padding: float = 5.0
-) -> np.ndarray:
-    """
-    Process image slice data and map to mesh nodes.
-    
-    Args:
-        mesh_coords: (N, 3) mesh node coordinates
-        slice_layers_data: List of (voxel_bounds, intensity_values) tuples
-        z_padding: Z-direction padding (mm)
-    
-    Returns:
-        (K, 5) array [X, Y, Z, intensity, group_id] with unique nodes
-    """
-```
-
----
-
-##### `normalize_coordinates()`
-
-```python
-def normalize_coordinates(
-    coords: np.ndarray
-) -> Tuple[np.ndarray, MinMaxScaler]:
-    """
-    Normalize coordinates to [0, 1] range.
-    
-    Args:
-        coords: (N, 3) XYZ coordinates
-    
-    Returns:
-        Tuple of (normalized_coords, scaler)
-    """
-```
-
----
-
-##### `denormalize_coordinates()`
-
-```python
-def denormalize_coordinates(
-    normalized_coords: np.ndarray,
-    scaler_min: np.ndarray,
-    scaler_max: np.ndarray
-) -> np.ndarray:
-    """
-    Denormalize coordinates from [0, 1] back to original range.
-    
-    Args:
-        normalized_coords: (N, 3) normalized coordinates
-        scaler_min: (3,) minimum values
-        scaler_max: (3,) maximum values
-    
-    Returns:
-        (N, 3) denormalized coordinates
-    """
-```
-
----
-
-#### Batching Functions
-
-##### `ScarReconstructionDataset`
+#### `ScarReconstructionDataset`
 
 ```python
 from cardioscar.utilities import ScarReconstructionDataset
@@ -922,9 +808,9 @@ from cardioscar.utilities import ScarReconstructionDataset
 class ScarReconstructionDataset(torch.utils.data.Dataset):
     """
     Dataset for scar reconstruction training.
-    
+
     Pre-sorts data by group_id to enable complete-group batching.
-    
+
     Attributes:
         coordinates: (N, 3) normalized coordinates
         intensities: (N, 1) target values
@@ -935,7 +821,7 @@ class ScarReconstructionDataset(torch.utils.data.Dataset):
 
 ---
 
-##### `create_complete_group_batches()`
+#### `create_complete_group_batches()`
 
 ```python
 def create_complete_group_batches(
@@ -944,17 +830,16 @@ def create_complete_group_batches(
 ) -> List[Tuple[int, int]]:
     """
     Create batches that respect group boundaries.
-    
+
+    No group is ever split across two batches. Actual batch sizes
+    vary to maintain this constraint.
+
     Args:
         dataset: ScarReconstructionDataset
         target_batch_size: Approximate batch size
-    
+
     Returns:
         List of (start_idx, end_idx) tuples defining batches
-    
-    Note:
-        Batches contain only complete groups (no group is split).
-        Actual batch sizes vary to maintain this constraint.
     """
 ```
 
@@ -967,9 +852,8 @@ def create_complete_group_batches(
 ```python
 from pathlib import Path
 from cardioscar.logic import *
-from cardioscar.training import TrainingConfig
+from cardioscar.training.config import TrainingConfig
 
-# 1. Prepare data
 request = PreprocessingRequest(
     mesh_path=Path("data/heart.vtk"),
     vtk_grid_paths=[Path(f"data/slice_{i}.vtk") for i in range(10)],
@@ -979,206 +863,84 @@ request = PreprocessingRequest(
 result = prepare_training_data(request)
 save_preprocessing_result(result, Path("data/training.npz"))
 
-print(f"Prepared {result.n_nodes} nodes in {result.n_groups} groups")
-
-# 2. Train model
 config = TrainingConfig()
 checkpoint = train_scar_model(Path("data/training.npz"), config)
 save_trained_model(checkpoint, Path("models/scar.pth"))
 
-print(f"Training converged at epoch {checkpoint['history']['converged_epoch']}")
-print(f"Best loss: {checkpoint['history']['best_loss']:.6f}")
-
-# 3. Apply to new mesh
 result = apply_scar_model(
     model_checkpoint_path=Path("models/scar.pth"),
-    mesh_path=Path("data/patient2_heart.vtk"),
+    mesh_path=Path("data/heart.vtk"),
     mc_samples=20
 )
-
-save_inference_result(result, Path("data/patient2_heart.vtk"), Path("results/patient2_scar.vtk"))
-
-print(f"Mean scar probability: {result.mean_scar_probability:.3f}")
-print(f"Mean uncertainty: {result.mean_uncertainty:.3f}")
+save_inference_result(result, Path("data/heart.vtk"), Path("results/scar.vtk"))
 ```
 
 ---
 
-### Example 2: Image Input (NIfTI)
-
-```python
-# Prepare from NIfTI image
-request = PreprocessingRequest(
-    mesh_path=Path("mesh.vtk"),
-    image_path=Path("lge_scan.nii.gz"),
-    slice_axis='z',
-    slice_indices=None,  # Use all slices
-    slice_thickness_padding=8.0  # Typical LGE thickness
-)
-
-result = prepare_training_data(request)
-save_preprocessing_result(result, Path("training.npz"))
-```
-
----
-
-### Example 3: Custom Training Loop
-
-```python
-import torch
-from cardioscar.engines import BayesianNN, compute_group_reconstruction_loss
-from cardioscar.utilities import ScarReconstructionDataset, create_complete_group_batches
-from cardioscar.training import CyclicalLR
-import numpy as np
-
-# Load data
-data = np.load("training.npz")
-dataset = ScarReconstructionDataset(
-    coordinates=data['coordinates'],
-    intensities=data['intensities'],
-    group_ids=data['group_ids'],
-    group_sizes=data['group_sizes']
-)
-
-# Create batches
-batches = create_complete_group_batches(dataset, target_batch_size=10000)
-
-# Initialize model
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-model = BayesianNN().to(device)
-optimizer = torch.optim.Adam(model.parameters())
-scheduler = CyclicalLR(optimizer, base_lr=1e-3, max_lr=1e-2, step_size=2000)
-
-# Training loop
-model.train()
-for epoch in range(1000):
-    epoch_loss = 0.0
-    
-    for start_idx, end_idx in batches:
-        # Get batch data
-        coords = torch.from_numpy(dataset.coordinates[start_idx:end_idx]).to(device)
-        targets = torch.from_numpy(dataset.intensities[start_idx:end_idx]).squeeze().to(device)
-        groups = torch.from_numpy(dataset.group_ids[start_idx:end_idx]).to(device)
-        
-        # MC Dropout forward passes
-        predictions = []
-        for _ in range(3):
-            pred = model(coords).squeeze()
-            predictions.append(pred)
-        
-        mean_pred = torch.stack(predictions).mean(dim=0)
-        
-        # Compute loss
-        loss = compute_group_reconstruction_loss(mean_pred, targets, groups)
-        
-        # Backward pass
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        scheduler.step()
-        
-        epoch_loss += loss.item()
-    
-    print(f"Epoch {epoch + 1}: Loss = {epoch_loss / len(batches):.6f}")
-```
-
----
-
-### Example 4: Batch Processing Multiple Patients
+### Example 2: Foundation Model + Fine-Tune
 
 ```python
 from pathlib import Path
-import logging
+from cardioscar.logic import train_scar_model, fine_tune_scar_model, save_trained_model
+from cardioscar.training.config import TrainingConfig, FineTuneConfig
 
-logger = logging.getLogger(__name__)
-
-def process_patient_cohort(patient_ids, model_path, output_dir):
-    """Process multiple patients with the same trained model."""
-    
-    output_dir = Path(output_dir)
-    output_dir.mkdir(exist_ok=True)
-    
-    for patient_id in patient_ids:
-        try:
-            logger.info(f"Processing patient {patient_id}...")
-            
-            # Apply model
-            result = apply_scar_model(
-                model_checkpoint_path=model_path,
-                mesh_path=Path(f"data/{patient_id}/mesh.vtk"),
-                mc_samples=10
-            )
-            
-            # Save result
-            output_path = output_dir / f"{patient_id}_scar.vtk"
-            save_inference_result(
-                result,
-                Path(f"data/{patient_id}/mesh.vtk"),
-                output_path
-            )
-            
-            logger.info(f"  ✓ Mean scar: {result.mean_scar_probability:.3f}")
-            
-        except Exception as e:
-            logger.error(f"  ✗ Failed: {e}")
-            continue
-
-# Usage
-process_patient_cohort(
-    patient_ids=['P001', 'P002', 'P003', 'P004'],
-    model_path=Path("models/scar.pth"),
-    output_dir=Path("results/cohort_study")
+# 1. Train foundation model on cohort data
+foundation_config = TrainingConfig(
+    batch_size=500000,
+    max_epochs=3000,
+    early_stopping_patience=500,
 )
+foundation_checkpoint = train_scar_model(
+    Path("foundation_training.npz"),
+    foundation_config
+)
+save_trained_model(foundation_checkpoint, Path("foundation_model.pth"))
+
+# 2. Fine-tune per patient (full fine-tune recommended)
+finetune_config = FineTuneConfig(freeze_stages=0)
+patient_checkpoint = fine_tune_scar_model(
+    training_data_path=Path("patient_001.npz"),
+    checkpoint_path=Path("foundation_model.pth"),
+    config=finetune_config,
+)
+save_trained_model(patient_checkpoint, Path("patient_001_finetuned.pth"))
+
+print(f"Fine-tuned from: {patient_checkpoint['fine_tuned_from']}")
+print(f"Best loss: {patient_checkpoint['history']['best_loss']:.6f}")
 ```
 
 ---
 
-### Example 5: Uncertainty-Based Quality Control
+### Example 3: Uncertainty-Based Quality Control
 
 ```python
 import numpy as np
-import pyvista as pv
 
 def quality_control_check(result: InferenceResult, threshold_std: float = 0.3):
-    """
-    Flag high-uncertainty regions for manual review.
-    
-    Args:
-        result: InferenceResult from model
-        threshold_std: Uncertainty threshold for flagging
-    
-    Returns:
-        Dict with QC metrics
-    """
+    """Flag high-uncertainty regions for manual review."""
     high_uncertainty_mask = result.std_predictions > threshold_std
     n_flagged = high_uncertainty_mask.sum()
     pct_flagged = 100 * n_flagged / result.n_nodes
-    
-    # Spatial distribution of uncertainty
-    uncertain_regions = result.mean_predictions[high_uncertainty_mask]
-    
+
     qc = {
         'total_nodes': result.n_nodes,
         'flagged_nodes': n_flagged,
         'flagged_percentage': pct_flagged,
         'mean_uncertainty': result.mean_uncertainty,
         'max_uncertainty': result.std_predictions.max(),
-        'uncertain_region_mean_scar': uncertain_regions.mean()
     }
-    
+
     if pct_flagged > 20:
         qc['recommendation'] = "Consider acquiring additional slices"
     elif pct_flagged > 10:
         qc['recommendation'] = "Review high-uncertainty regions manually"
     else:
         qc['recommendation'] = "Quality acceptable"
-    
+
     return qc
 
-# Usage
 result = apply_scar_model(Path("model.pth"), Path("mesh.vtk"))
 qc = quality_control_check(result)
-
 print(f"Flagged {qc['flagged_percentage']:.1f}% of nodes")
 print(f"Recommendation: {qc['recommendation']}")
 ```
@@ -1187,322 +949,113 @@ print(f"Recommendation: {qc['recommendation']}")
 
 ## Performance Benchmarks
 
-Based on validation against legacy TensorFlow implementation (3.5 hour training):
-
 ### Training Performance
 
-| Dataset Size     | Nodes  | Groups | GPU      | Training Time | Speedup     |
-| ---------------- | ------ | ------ | -------- | ------------- | ----------- |
-| Single Slice     | 29,323 | 2,401  | RTX 3090 | 5.8 min       | **36×**     |
-| Single Slice     | 29,323 | 2,401  | CPU      | ~45 min       | 4.7×        |
-| Multi-Slice (10) | ~250k  | ~20k   | RTX 3090 | ~30 min       | ~10× (est.) |
+| Configuration    | Parameters | Dataset        | Training Time | Best Loss |
+| ---------------- | ---------- | -------------- | ------------- | --------- |
+| 4×128 (default)  | 50,177     | Single patient | ~2 min        | 0.000884  |
+| 4×256            | 198,657    | Single patient | ~5.5 min      | 0.000872  |
+| 6×256 (legacy)   | 330,241    | Single patient | ~2 min*       | 0.013940* |
+| Foundation 4×128 | 50,177     | 11 patients    | ~88 min       | 0.007490  |
 
-### Model Quality
+*Variance collapse - did not converge. Legacy architecture requires careful
+initialisation and is not recommended.
 
-| Metric          | Legacy TensorFlow | CardioScar        | Notes               |
-| --------------- | ----------------- | ----------------- | ------------------- |
-| Mean Prediction | 0.091             | 0.091             | Identical           |
-| Correlation     | 1.0 (self)        | 0.79 vs legacy    | Strong agreement    |
-| MAE             | -                 | 0.052             | ~5% error           |
-| Dice Score      | 0.958 (paper)     | 0.95+ (validated) | Matches publication |
+### Fine-Tuning vs Scratch (single patient, subset_013_n10_f1_s15)
+
+| Condition          | Best loss | Epochs | Wall time |
+| ------------------ | --------- | ------ | --------- |
+| Scratch (4×128)    | 0.000884  | 2164   | 1.7 min   |
+| Fine-tune frozen=0 | 0.000627  | 4629   | 3.6 min   |
+| Fine-tune frozen=2 | 0.004748  | 300+   | 0.2 min   |
+
+Fine-tuning achieves 29% lower loss than scratch. Frozen backbone (frozen=2)
+is not recommended - insufficient capacity to overcome pretrained representation
+in limited epochs.
 
 ### Inference Performance
 
 | Mesh Size  | MC Samples | GPU      | Time    |
 | ---------- | ---------- | -------- | ------- |
-| 33k nodes  | 10         | RTX 3090 | <10 sec |
-| 33k nodes  | 20         | RTX 3090 | <20 sec |
-| 100k nodes | 10         | RTX 3090 | <30 sec |
+| 516k nodes | 10         | RTX 5090 | <30 sec |
 
 ### Model Size
 
-| Implementation     | Parameters | Memory   |
-| ------------------ | ---------- | -------- |
-| Legacy (6×256)     | 330,241    | ~1.3 MB  |
-| CardioScar (4×128) | 50,177     | ~200 KB  |
-| **Reduction**      | **6.6×**   | **6.5×** |
+| Implementation     | Parameters | Notes                       |
+| ------------------ | ---------- | --------------------------- |
+| Legacy (6×256)     | 330,241    | TensorFlow, unstable init   |
+| CardioScar (4×128) | 50,177     | Default, recommended        |
+| CardioScar (4×256) | 198,657    | Marginal improvement on 50k |
 
 ---
 
 ## Common Pitfalls
 
-### 1. **Mesh and Slices Don't Overlap**
+### 1. Mesh and Slices Don't Overlap
 
-**Symptom:**
-```
-ValueError: No valid mappings found. Check that slices overlap with mesh coordinates.
-```
+**Symptom:** `ValueError: No valid mappings found`
 
-**Causes:**
-- Mesh and images in different coordinate systems
-- Incorrect slice axis specified
-- Wrong image orientation
-
-**Solutions:**
-```python
-# Check coordinate ranges
-import pyvista as pv
-import SimpleITK as sitk
-
-mesh = pv.read("mesh.vtk")
-print(f"Mesh bounds: {mesh.bounds}")
-
-img = sitk.ReadImage("image.nii.gz")
-print(f"Image origin: {img.GetOrigin()}")
-print(f"Image spacing: {img.GetSpacing()}")
-print(f"Image size: {img.GetSize()}")
-
-# Ensure they overlap spatially
-# Consider resampling image or transforming mesh
-```
+**Solutions:** Check coordinate ranges, verify slice axis, confirm image orientation matches mesh coordinate system.
 
 ---
 
-### 2. **CUDA Out of Memory**
+### 2. CUDA Out of Memory
 
-**Symptom:**
-```
-RuntimeError: CUDA out of memory
-```
+**Symptom:** `RuntimeError: CUDA out of memory`
 
-**Solutions:**
 ```bash
-# Reduce batch size
-cardioscar train --training-data data.npz --batch-size 5000
-
-# Reduce MC samples
-cardioscar train --training-data data.npz --mc-samples 2
-
-# Use CPU (slower but no memory limit)
-cardioscar train --training-data data.npz --cpu
+cardioscar train --training-data data.npz --batch-size 5000 --mc-samples 2
 ```
 
 ---
 
-### 3. **Training Doesn't Converge**
+### 3. Training Doesn't Converge
 
-**Symptom:**
-- Loss plateaus at high value (>0.1)
-- Loss oscillates wildly
-
-**Causes:**
-- Learning rate too high/low
-- Bad data (slices don't represent mesh)
-- Group constraints violated
-
-**Solutions:**
-```python
-# Adjust learning rate
-config = TrainingConfig(
-    base_lr=5e-4,  # Lower
-    max_lr=5e-3
-)
-
-# Check data quality
-result = prepare_training_data(request)
-print(f"Nodes: {result.n_nodes}")
-print(f"Groups: {result.n_groups}")
-print(f"Avg nodes/group: {result.group_sizes.mean():.1f}")
-
-# Groups with <5 nodes may cause instability
-```
+Loss plateaus above 0.01: check data quality, verify group constraints, try lower learning rate.
 
 ---
 
-### 4. **Predictions All Zero or All One**
+### 4. Predictions All Zero (Variance Collapse)
 
-**Symptom:**
-- All predictions near 0 or near 1
-- No spatial variation
-
-**Causes:**
-- Model didn't train properly (check training loss)
-- Wrong scaler parameters loaded
-- Model loaded incorrectly
-
-**Solutions:**
-```python
-# Check model was trained
-checkpoint = torch.load("model.pth")
-print(f"Best loss: {checkpoint['history']['best_loss']}")
-print(f"Converged: {checkpoint['history']['converged_epoch']}")
-
-# Verify scaler params
-print(f"Scaler min: {checkpoint['dataset_info']['scaler_min']}")
-print(f"Scaler max: {checkpoint['dataset_info']['scaler_max']}")
-```
+Seen with 6-layer architectures. Switch to default 4-layer architecture. If using deeper networks, reduce learning rate significantly.
 
 ---
 
-### 5. **Uncertainty is Constant Everywhere**
+### 5. Checkpoint Architecture Mismatch
 
-**Symptom:**
-- `scar_uncertainty` same value everywhere
-- No spatial variation in uncertainty
+**Symptom:** `RuntimeError: size mismatch` when loading checkpoint.
 
-**Cause:**
-- Dropout not enabled during inference
-
-**Solution:**
-```python
-# Ensure MC samples > 1
-cardioscar apply --model model.pth --mesh mesh.vtk --mc-samples 10
-
-# In Python API
-result = apply_scar_model(
-    model_checkpoint_path=Path("model.pth"),
-    mesh_path=Path("mesh.vtk"),
-    mc_samples=10  # Must be > 1 for uncertainty
-)
-```
+Architecture is always read from the checkpoint `hyperparameters` dict. Do not manually pass `hidden_size` or `n_hidden_layers` to `apply_scar_model` or `fine_tune_scar_model` - they are restored automatically.
 
 ---
 
-### 6. **Image Slices Not Detected**
+### 6. Legacy Checkpoint Compatibility
 
-**Symptom:**
-```
-No slices extracted from image
-```
-
-**Causes:**
-- `slice_indices` out of bounds
-- Wrong `slice_axis`
-- Image is 2D not 3D
-
-**Solutions:**
-```python
-import SimpleITK as sitk
-
-img = sitk.ReadImage("image.nii.gz")
-print(f"Image dimensions: {img.GetSize()}")  # (X, Y, Z)
-
-# Check slice axis
-# If size is (512, 512, 20), Z-axis has 20 slices
-# Valid slice_indices: 0-19
-
-# Use all slices
-request = PreprocessingRequest(
-    mesh_path=Path("mesh.vtk"),
-    image_path=Path("image.nii.gz"),
-    slice_indices=None  # Auto-detect all slices
-)
-```
+Checkpoints saved before architecture parameterisation (without `hidden_size`/`n_hidden_layers` in `hyperparameters`) load correctly via `.get()` fallbacks to `DEFAULT_HIDDEN_SIZE` and `DEFAULT_N_HIDDEN_LAYERS`.
 
 ---
 
-### 7. **Model File Corrupted**
+### 7. Freeze Stages on Non-Default Depth
 
-**Symptom:**
-```
-RuntimeError: Invalid checkpoint file
-```
+**Symptom:** `ValueError: freeze_stages is only supported for n_hidden_layers=4`
 
-**Cause:**
-- Training interrupted
-- Disk full during save
-- File transfer corruption
-
-**Solution:**
-```python
-# Check file integrity
-import torch
-
-try:
-    checkpoint = torch.load("model.pth", weights_only=False)
-    print("Checkpoint valid!")
-    print(f"Keys: {checkpoint.keys()}")
-except Exception as e:
-    print(f"Checkpoint corrupted: {e}")
-    print("Retrain model or use backup")
-```
-
----
-
-### 8. **Scalar Field Name Mismatch**
-
-**Symptom:**
-```
-ValueError: Scalar field 'ScalarValue' not found
-```
-
-**Cause:**
-- VTK grid has different field name
-
-**Solution:**
-```python
-import pyvista as pv
-
-grid = pv.read("slice.vtk")
-print(f"Available fields: {grid.array_names}")
-
-# Use correct field name
-cardioscar prepare \
-    --mesh-vtk mesh.vtk \
-    --grid-layers slice.vtk \
-    --vtk-scalar-field "CorrectFieldName" \
-    --output data.npz
-```
-
----
-
-### 9. **Group Batching Issues**
-
-**Symptom:**
-- Training very slow (hours instead of minutes)
-- Memory usage spikes
-
-**Cause:**
-- Groups too large (thousands of nodes per group)
-- Batch size too small
-
-**Solution:**
-```python
-# Check group distribution
-data = np.load("training.npz")
-group_sizes = data['group_sizes']
-
-print(f"Mean group size: {group_sizes.mean():.1f}")
-print(f"Max group size: {group_sizes.max()}")
-print(f"Groups > 1000 nodes: {(group_sizes > 1000).sum()}")
-
-# If max_group_size > batch_size, increase batch size
-cardioscar train --training-data data.npz --batch-size 50000
-```
-
----
-
-### 10. **Python API Import Errors**
-
-**Symptom:**
-```
-ImportError: cannot import name 'prepare_training_data'
-```
-
-**Cause:**
-- Wrong import path
-- Package not installed
-
-**Solution:**
-```bash
-# Reinstall package
-pip install -e .
-
-# Verify installation
-python -c "import cardioscar; print(cardioscar.__version__)"
-
-# Correct import
-from cardioscar.logic import prepare_training_data  # ✓ Correct
-from cardioscar import prepare_training_data        # ✗ Wrong
-```
+Layer freezing is only implemented for the default 4-layer architecture. Use `freeze_stages=0` for any model trained with `--hidden-layers != 4`.
 
 ---
 
 ## Citation
 
-If you use CardioScar in your research, please cite:
-
 ```bibtex
+@article{SEN2025111219,
+  title = {Weakly supervised learning for scar reconstruction in personalized cardiac models},
+  journal = {Computers in Biology and Medicine},
+  volume = {198},
+  pages = {111219},
+  year = {2025},
+  doi = {https://doi.org/10.1016/j.compbiomed.2025.111219},
+  author = {Ahmet SEN and Ursula Rohrer and Pranav Bhagirath and Reza Razavi and Mark O'Neill and John Whitaker and Martin Bishop},
+}
+
 @software{cardioscar2024,
   title={CardioScar: Deep Learning-Based 3D Myocardial Scar Reconstruction},
   author={Sen, Ahmet and Bishop, Martin J. and Solis-Lemus, Jose Alonso},
@@ -1512,32 +1065,7 @@ If you use CardioScar in your research, please cite:
 }
 ```
 
-**Original Paper:**
-```bibtex
-@article{sen2024scar,
-  title={3D Scar Reconstruction from Sparse 2D LGE-CMR Slices},
-  author={Sen, Ahmet and Bishop, Martin J. and others},
-  journal={Medical Image Analysis},
-  year={2024}
-}
-```
-
----
-
-## License
-
-[Specify your license here - e.g., MIT, Apache 2.0]
-
----
-
-## Support
-
-- **Documentation:** [Link to full docs]
-- **Issues:** [GitHub Issues]
-- **Discussions:** [GitHub Discussions]
-- **Email:** [Support email]
-
 ---
 
 **Version:** 0.1.0  
-**Last Updated:** February 2026
+**Last Updated:** March 2026

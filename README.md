@@ -11,13 +11,14 @@ Deep learning-based 3D myocardial scar reconstruction from sparse 2D Late Gadoli
 CardioScar implements a **coordinate-based Bayesian neural network** that reconstructs continuous 3D scar probability fields from sparse 2D MRI slices. It addresses the challenge of low through-plane resolution (8-10mm) in LGE-CMR by learning smooth anatomically plausible interpolations that preserve narrow conducting isthmuses critical for arrhythmia prediction.
 
 **Key Features:**
-- **Faster training** than legacy implementation 
+- **Faster training** than legacy implementation
 - **Bayesian uncertainty quantification** via Monte Carlo Dropout
-- **Smaller model** (330k → 50k parameters) with equivalent accuracy
+- **Configurable architecture** - default 50k parameters (4×128), scalable to legacy-equivalent 330k (6×256)
+- **Foundation model support** - train once on a cohort, fine-tune per patient
 - **Production-ready architecture** - type-safe contracts, CLI tooling, comprehensive testing
 - **Oblique image support** - correct handling of arbitrarily oriented medical images
 - **Flexible input** - works with VTK grid slices or NIfTI/NRRD volumes
-- 
+
 ---
 
 ## Table of Contents
@@ -25,6 +26,10 @@ CardioScar implements a **coordinate-based Bayesian neural network** that recons
 - [Installation](#installation)
 - [Quick Start](#quick-start)
 - [Command Line Interface](#command-line-interface)
+  - [prepare](#cardioscar-prepare)
+  - [train](#cardioscar-train)
+  - [fine-tune](#cardioscar-fine-tune)
+  - [apply](#cardioscar-apply)
 - [Python API](#python-api)
 - [Method Overview](#method-overview)
 - [Examples](#examples)
@@ -71,14 +76,14 @@ pip install torch --index-url https://download.pytorch.org/whl/cu118
 
 ```bash
 cardioscar --version
-python -c "import cardioscar; print('✓ CardioScar installed successfully')"
+python -c "import cardioscar; print('CardioScar installed successfully')"
 ```
 
 ---
 
 ## Quick Start
 
-CardioScar provides a unified CLI with three main commands: **`prepare`**, **`train`**, and **`apply`**.
+CardioScar provides a unified CLI with four main commands: **`prepare`**, **`train`**, **`fine-tune`**, and **`apply`**.
 
 ### Complete Workflow (CLI)
 
@@ -100,6 +105,30 @@ cardioscar apply \
     --mesh data/lv_mesh.vtk \
     --output results/scar_predictions.vtk \
     --mc-samples 20
+```
+
+### Foundation Model + Fine-Tune Workflow
+
+```bash
+# 1. Build foundation dataset from cohort
+python scripts/build_foundation_dataset.py \
+    --input-dir prepare_outputs/ \
+    --output-dir foundation/ \
+    --train-subsets 11 --finetune-subsets 2 --test-subsets 2 \
+    --expected-subsets 180
+
+# 2. Train foundation model on cohort
+cardioscar train \
+    --training-data foundation/foundation_training.npz \
+    --output foundation_model.pth \
+    --batch-size 500000 \
+    --max-epochs 3000
+
+# 3. Fine-tune per patient (faster convergence)
+cardioscar fine-tune \
+    --checkpoint foundation_model.pth \
+    --training-data patient_001_training.npz \
+    --output patient_001_finetuned.pth
 ```
 
 ### Python API
@@ -138,8 +167,8 @@ inference_result = apply_scar_model(
     mc_samples=20
 )
 save_inference_result(
-    inference_result, 
-    Path("data/lv_mesh.vtk"), 
+    inference_result,
+    Path("data/lv_mesh.vtk"),
     Path("results/scar_predictions.vtk")
 )
 ```
@@ -163,22 +192,6 @@ cardioscar prepare \
     [--slice-indices "2,5,8,11"]
 ```
 
-**Example:**
-```bash
-# Use all slices
-cardioscar prepare \
-    --mesh-vtk heart.vtk \
-    --image lge_scan.nii.gz \
-    --output training_data.npz
-
-# Use specific slices only
-cardioscar prepare \
-    --mesh-vtk heart.vtk \
-    --image lge_scan.nii.gz \
-    --slice-indices "5,10,15,20" \
-    --output training_data.npz
-```
-
 #### From VTK Grid Slices (Legacy)
 
 ```bash
@@ -187,15 +200,6 @@ cardioscar prepare \
     --grid-layers SLICE1.vtk [SLICE2.vtk ...] \
     --output TRAINING.npz \
     [--vtk-scalar-field FIELD_NAME]
-```
-
-**Example:**
-```bash
-cardioscar prepare \
-    --mesh-vtk heart.vtk \
-    --grid-layers slice_*.vtk \
-    --vtk-scalar-field scar_probability \
-    --output training_data.npz
 ```
 
 **Key Options:**
@@ -221,11 +225,7 @@ Train Bayesian neural network on prepared data.
 cardioscar train \
     --training-data TRAINING.npz \
     --output MODEL.pth \
-    [--batch-size SIZE] \
-    [--max-epochs N] \
-    [--early-stopping-patience N] \
-    [--mc-samples N] \
-    [--cpu]
+    [OPTIONS]
 ```
 
 **Example:**
@@ -235,19 +235,12 @@ cardioscar train \
     --training-data training_data.npz \
     --output model.pth
 
-# High-quality (slower)
+# Larger architecture (for complex datasets)
 cardioscar train \
     --training-data training_data.npz \
     --output model.pth \
-    --mc-samples 5 \
-    --early-stopping-patience 1000
-
-# Fast prototyping
-cardioscar train \
-    --training-data training_data.npz \
-    --output model.pth \
-    --max-epochs 1000 \
-    --early-stopping-patience 100
+    --hidden-size 256 \
+    --hidden-layers 4
 ```
 
 **Key Options:**
@@ -260,7 +253,66 @@ cardioscar train \
 | `--max-epochs`              | Maximum training epochs                    | 10000           |
 | `--early-stopping-patience` | Epochs without improvement before stopping | 500             |
 | `--mc-samples`              | MC Dropout samples during training         | 3               |
+| `--hidden-size`             | Neurons per hidden layer                   | 128             |
+| `--hidden-layers`           | Number of hidden layers                    | 4               |
 | `--cpu`                     | Force CPU usage                            | Auto-detect GPU |
+
+---
+
+### `cardioscar fine-tune`
+
+Fine-tune a pretrained foundation model on new patient data. Architecture is
+always restored from the checkpoint — it cannot be overridden.
+
+```bash
+cardioscar fine-tune \
+    --checkpoint FOUNDATION.pth \
+    --training-data PATIENT.npz \
+    --output FINETUNED.pth \
+    [OPTIONS]
+```
+
+**Example:**
+```bash
+# Full fine-tune (recommended)
+cardioscar fine-tune \
+    --checkpoint foundation_model.pth \
+    --training-data patient_001.npz \
+    --output patient_001_finetuned.pth
+
+# Frozen backbone (experimental - only valid for 4-layer models)
+cardioscar fine-tune \
+    --checkpoint foundation_model.pth \
+    --training-data patient_001.npz \
+    --output patient_001_finetuned.pth \
+    --freeze-stages 2
+```
+
+**Key Options:**
+
+| Option                      | Description                                         | Default         |
+| --------------------------- | --------------------------------------------------- | --------------- |
+| `--checkpoint`              | Path to pretrained foundation model (.pth)          | Required        |
+| `--training-data`           | Path to fine-tuning training data (.npz)            | Required        |
+| `--output`                  | Output path for fine-tuned model (.pth)             | Required        |
+| `--freeze-stages`           | Stages to freeze (0-4). 0=full fine-tune            | 0               |
+| `--batch-size`              | Target batch size                                   | 10000           |
+| `--max-epochs`              | Maximum fine-tuning epochs                          | 1000            |
+| `--early-stopping-patience` | Epochs without improvement before stopping          | 200             |
+| `--mc-samples`              | MC Dropout samples during training                  | 3               |
+| `--base-lr`                 | Base learning rate (lower than scratch training)    | 1e-4            |
+| `--max-lr`                  | Maximum learning rate (lower than scratch training) | 1e-3            |
+| `--cpu`                     | Force CPU usage                                     | Auto-detect GPU |
+
+**Freeze stages** (valid for default 4-layer architecture only):
+
+| Value | Frozen layers                      |
+| ----- | ---------------------------------- |
+| 0     | None (full fine-tune, recommended) |
+| 1     | Linear(3→128) + ReLU               |
+| 2     | + Linear(128→128) + Dropout + ReLU |
+| 3     | + Linear(128→128) + ReLU           |
+| 4     | + Linear(128→128) + Dropout + ReLU |
 
 ---
 
@@ -273,32 +325,7 @@ cardioscar apply \
     --model MODEL.pth \
     --mesh MESH.vtk \
     --output OUTPUT.vtk \
-    [--mc-samples N] \
-    [--threshold VALUE] \
-    [--batch-size SIZE]
-```
-
-**Example:**
-```bash
-# Basic inference
-cardioscar apply \
-    --model model.pth \
-    --mesh heart.vtk \
-    --output scar_predictions.vtk
-
-# High-quality uncertainty estimation
-cardioscar apply \
-    --model model.pth \
-    --mesh heart.vtk \
-    --output scar_predictions.vtk \
-    --mc-samples 20
-
-# With binary threshold
-cardioscar apply \
-    --model model.pth \
-    --mesh heart.vtk \
-    --output scar_predictions.vtk \
-    --threshold 0.5
+    [OPTIONS]
 ```
 
 **Key Options:**
@@ -334,6 +361,10 @@ from cardioscar.logic import prepare_training_data, PreprocessingRequest
 # Training
 from cardioscar.logic import train_scar_model, TrainingConfig
 
+# Fine-tuning
+from cardioscar.logic import fine_tune_scar_model
+from cardioscar.training.config import FineTuneConfig
+
 # Inference
 from cardioscar.logic import apply_scar_model
 
@@ -355,31 +386,24 @@ def process_patient_cohort(patient_ids, model_path, output_dir):
     """Process multiple patients with same trained model."""
     output_dir = Path(output_dir)
     output_dir.mkdir(exist_ok=True)
-    
+
     for patient_id in patient_ids:
         print(f"Processing {patient_id}...")
-        
+
         result = apply_scar_model(
             model_checkpoint_path=model_path,
             mesh_path=Path(f"data/{patient_id}/mesh.vtk"),
             mc_samples=10
         )
-        
+
         save_inference_result(
             result,
             Path(f"data/{patient_id}/mesh.vtk"),
             output_dir / f"{patient_id}_scar.vtk"
         )
-        
+
         print(f"  Mean scar: {result.mean_scar_probability:.3f}")
         print(f"  Uncertainty: {result.mean_uncertainty:.3f}")
-
-# Usage
-process_patient_cohort(
-    patient_ids=['P001', 'P002', 'P003'],
-    model_path=Path("models/scar.pth"),
-    output_dir=Path("results/")
-)
 ```
 
 ---
@@ -398,26 +422,26 @@ process_patient_cohort(
 
 ### Approach
 
-1. **Spatial Constraint Mapping**  
+1. **Spatial Constraint Mapping**
    Each 2D image pixel extends through slice thickness as a rectangular prism. All 3D mesh nodes within this prism form a "group".
 
-2. **Physical Constraint**  
+2. **Physical Constraint**
    The mean prediction across all nodes in a group must equal the observed 2D pixel value.
 
-3. **Network Architecture**  
+3. **Network Architecture**
    Coordinate-based MLP: (X, Y, Z) → scar probability
    - Input: 3D coordinates (normalized to [0, 1])
-   - Architecture: 4 hidden layers × 128 neurons
-   - Dropout: 10% for uncertainty estimation
+   - Architecture: configurable hidden layers × neurons (default: 4×128, ~50k parameters)
+   - Dropout: configurable rate for uncertainty estimation (default: 10%)
    - Output: Sigmoid activation → [0, 1] probability
 
-4. **Loss Function**  
+4. **Loss Function**
    Group-based reconstruction loss:
    ```
    L = Σ_groups (pixel_value - mean(group_predictions))²
    ```
 
-5. **Optimization**  
+5. **Optimization**
    - Adam optimizer with cyclical learning rate (1e-3 to 1e-2)
    - Monte Carlo Dropout (3-5 samples during training)
    - Complete-group mini-batching (groups never split across batches)
@@ -428,8 +452,8 @@ process_patient_cohort(
 Traditional mini-batching would split spatial groups across batches, violating the physical constraint. Our implementation:
 - Pre-sorts nodes by group ID
 - Ensures batches contain only complete groups
-- Batch sizes vary slightly (~±10%) to maintain exact constraints
-- Enables 5× speedup over naive full-batch training while preserving accuracy
+- Batch sizes vary slightly to maintain exact constraints
+- Fully vectorized via `torch.scatter_add` - no Python loops over groups
 
 ### Bayesian Uncertainty Quantification
 
@@ -438,12 +462,19 @@ Monte Carlo Dropout provides:
 - **High uncertainty regions**: Areas where model is less confident (e.g., sparse data, ambiguous boundaries)
 - **Quality control**: Flag regions requiring manual review or additional imaging
 
+### Foundation Model + Fine-Tuning
+
+For cohort studies, a foundation model can be trained on multiple patients and then fine-tuned per patient:
+- Foundation training captures shared cardiac anatomy representations
+- Per-patient fine-tuning adapts to individual scar patterns
+- Fine-tuning uses lower learning rates (1e-4/1e-3 vs 1e-3/1e-2) to preserve pretrained weights
+- Optionally freeze early network stages to retain shared representations
+
 ---
 
 ## Citation
 
 If you use CardioScar in your research, please cite:
-
 
 ### Original Research
 
@@ -473,13 +504,14 @@ If you use CardioScar in your research, please cite:
   version={0.1.0}
 }
 ```
+
 ---
 
 ## Acknowledgments
 
-**Original Research:** Ahmet Sen, Martin J. Bishop (King's College London)  
-**Engineering & pycemrg Integration:** Jose Alonso Solis-Lemus (Imperial College London)  
+**Original Research:** Ahmet Sen, Martin J. Bishop (King's College London)
 **Collaborators:** Ursula Rohrer, Pranav Bhagirath, Reza Razavi, Mark O'Neill, John Whitaker
+**Engineering & pycemrg Integration:** Jose Alonso Solis-Lemus (Imperial College London)
 
 This work builds upon:
 - Original TensorFlow implementation by Ahmet Sen
@@ -512,5 +544,5 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ---
 
-**Version:** 0.1.0  
-**Last Updated:** February 2026s
+**Version:** 0.1.0
+**Last Updated:** March 2026
